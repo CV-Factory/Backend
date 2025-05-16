@@ -94,6 +94,23 @@ async def crawl_website_content(self, url: str, query: str):
             await browser.close()
             logger.info("브라우저를 닫았습니다.")
 
+        # --- 로그 파일 저장 로직 추가 ---
+        if html_content:
+            # 파일명 생성을 위한 URL 정제
+            sanitized_url_for_filename = "".join(c if c.isalnum() else "_" for c in url.split("//")[-1]) # 프로토콜 제외하고 정제
+            log_dir = "logs"
+            os.makedirs(log_dir, exist_ok=True)
+
+            # 전체 HTML 저장
+            full_html_file_path = os.path.join(log_dir, f"full_html_{sanitized_url_for_filename[:100]}.html")
+            try:
+                with open(full_html_file_path, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                logger.info(f"전체 HTML content saved to {full_html_file_path}")
+            except Exception as e_save_html:
+                logger.error(f"전체 HTML 파일 저장 실패: {full_html_file_path}, 오류: {e_save_html}")
+        # --- 로그 파일 저장 로직 끝 ---
+
         # BeautifulSoup으로 텍스트 추출
         if html_content:
             soup = BeautifulSoup(html_content, "html.parser")
@@ -119,6 +136,17 @@ async def crawl_website_content(self, url: str, query: str):
             if texts:
                 extracted_text = "\\n".join(texts)
                 logger.info(f"텍스트 추출 성공 (길이: {len(extracted_text)}).")
+
+                # --- 추출된 텍스트 파일 저장 로직 추가 ---
+                if extracted_text:
+                    extracted_text_file_path = os.path.join(log_dir, f"extracted_text_{sanitized_url_for_filename[:100]}.txt")
+                    try:
+                        with open(extracted_text_file_path, "w", encoding="utf-8") as f:
+                            f.write(extracted_text)
+                        logger.info(f"추출된 텍스트 saved to {extracted_text_file_path}")
+                    except Exception as e_save_text:
+                        logger.error(f"추출된 텍스트 파일 저장 실패: {extracted_text_file_path}, 오류: {e_save_text}")
+                # --- 추출된 텍스트 파일 저장 로직 끝 ---
             else:
                 logger.warning("BeautifulSoup으로 텍스트를 추출하지 못했습니다. HTML 내용은 있었으나, 유의미한 텍스트를 찾지 못했습니다.")
                 # 이 경우, html_content를 그대로 사용하거나, 다른 전략을 고려할 수 있습니다.
