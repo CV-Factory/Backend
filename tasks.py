@@ -10,8 +10,8 @@ from bs4 import BeautifulSoup # BeautifulSoup 임포트
 import os
 import datetime
 from celery import Celery
-from playwright.sync_api import sync_playwright, Error as SyncPlaywrightError # Playwright 동기 에러 임포트 (디버깅용)
-from playwright.async_api import async_playwright, Error as PlaywrightError # Playwright 비동기 에러 임포트
+from playwright.sync_api import sync_playwright, Error as PlaywrightError # Playwright 동기/비동기 에러 임포트 수정
+# from playwright.async_api import async_playwright, Error as AsyncPlaywrightError # 사용하지 않음
 from celery.utils.log import get_task_logger
 
 # 로거 설정
@@ -21,80 +21,55 @@ logger = get_task_logger(__name__)
 # import os
 # genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# Playwright를 사용하여 웹사이트 내용을 비동기적으로 크롤링하는 함수
-# async def crawl_website_content(url: str): # 비동기 함수 선언 주석 처리
+# Playwright를 사용하여 웹사이트 내용을 동기적으로 크롤링하는 함수로 변경
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-async def crawl_website_content(self, url: str, query: str = None): # query를 선택적 인자로 변경
+def crawl_website_content(self, url: str, query: str = None): # async 제거
     log_message_prefix = f"URL: {url}"
     if query:
         log_message_prefix += f", Query: {query}"
     logger.info(f"크롤링 시작: {log_message_prefix}")
     html_content = ""
     extracted_text = ""
-    # playwright_version = get_playwright_version()
-    # logger.info(f"Playwright Version: {playwright_version}")
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True) # Docker 환경에서는 True로 설정
-            page = await browser.new_page()
+        with sync_playwright() as p: # sync_playwright 사용
+            browser = p.chromium.launch(headless=True) # await 제거
+            page = browser.new_page() # await 제거
             logger.info(f"페이지 이동: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000) # timeout 증가
+            page.goto(url, wait_until="domcontentloaded", timeout=60000) # await 제거
 
             # 페이지 로드 후 추가 대기 (동적 콘텐츠 로드 고려)
-            await page.wait_for_timeout(5000)
+            page.wait_for_timeout(5000) # await 제거
 
             # iframe을 찾습니다.
             iframe_locator = page.locator('iframe[name="gib_frame"]')
-            if await iframe_locator.count_async() > 0:
+            if iframe_locator.count() > 0: # _async 제거
                 logger.info("iframe 'gib_frame'을 찾았습니다.")
                 try:
                     frame = page.frame(name="gib_frame")
                     if frame:
                         logger.info("iframe 내부 프레임에 접근했습니다. (page.frame(name='gib_frame'))")
-                        # iframe 내부 컨텐츠가 로드될 시간을 충분히 확보합니다.
                         logger.info("iframe 내부 콘텐츠 로드를 위해 대기합니다.")
-                        # CSS 선택자를 사용하여 특정 요소가 나타날 때까지 대기 (예: iframe 내부의 body 또는 특정 컨테이너)
-                        # 또는 내용이 채워질 때까지 좀 더 일반적인 선택자로 대기
                         try:
-                            await frame.wait_for_selector("body *:not(:empty)", timeout=20000) # 20초로 증가
+                            frame.wait_for_selector("body *:not(:empty)", timeout=20000) # await 제거
                             logger.info("iframe 내부 요소가 나타났습니다.")
-                        except Exception as e_wait: # Playwright의 TimeoutError는 Error의 하위 클래스일 수 있음
+                        except PlaywrightError as e_wait: # Playwright의 TimeoutError는 Error의 하위 클래스
                             logger.warning(f"iframe 내부 요소 대기 시간 초과 또는 오류: {e_wait}, 추가 대기 시도")
                         
-                        await page.wait_for_timeout(7000) # 충분한 대기 시간
+                        page.wait_for_timeout(7000) # await 제거, 충분한 대기 시간
 
-                        html_content = await frame.content()
+                        html_content = frame.content() # await 제거
                         logger.info(f"iframe HTML 길이: {len(html_content)}")
-
-                        # iframe HTML을 파일에 저장 (디버깅 목적이었으나, 운영에서는 제거 또는 조건부로 변경)
-                        # sanitized_url_for_filename = "".join(c if c.isalnum() else "_" for c in url)
-                        # debug_iframe_html_file_path = f"logs_inspector_debug/debug_iframe_html_async_{sanitized_url_for_filename}.html"
-                        # os.makedirs(os.path.dirname(debug_iframe_html_file_path), exist_ok=True)
-                        # with open(debug_iframe_html_file_path, "w", encoding="utf-8") as f:
-                        #     f.write(html_content)
-                        # logger.info(f"iframe HTML content saved to {debug_iframe_html_file_path}")
                     else:
                         logger.warning("iframe 'gib_frame'을 찾았으나, 프레임에 접근할 수 없습니다. 페이지 전체 HTML을 사용합니다.")
-                        html_content = await page.content()
+                        html_content = page.content() # await 제거
                 except Exception as e_iframe:
                     logger.error(f"iframe 처리 중 오류 발생: {e_iframe}. 페이지 전체 HTML을 사용합니다.")
-                    html_content = await page.content()
+                    html_content = page.content() # await 제거
             else:
                 logger.info("iframe 'gib_frame'을 찾지 못했습니다. 페이지 전체 HTML을 사용합니다.")
-                html_content = await page.content()
+                html_content = page.content() # await 제거
             
-            # 전체 페이지 HTML을 가져오는 부분 (iframe을 못찾거나 오류 발생 시)
-            # html_content = await page.content() # 위 로직에서 이미 처리됨
-
-            # HTML 파일로 저장 (디버깅 용도)
-            # sanitized_url_for_filename = "".join(c if c.isalnum() else "_" for c in url)
-            # debug_html_file_path = f"logs_inspector_debug/debug_html_async_{sanitized_url_for_filename}.html"
-            # os.makedirs(os.path.dirname(debug_html_file_path), exist_ok=True)
-            # with open(debug_html_file_path, "w", encoding="utf-8") as f:
-            #    f.write(html_content)
-            # logger.info(f"HTML content saved to {debug_html_file_path} (length: {len(html_content)})")
-
-            await browser.close()
+            browser.close() # await 제거
             logger.info("브라우저를 닫았습니다.")
 
         # --- 로그 파일 저장 로직 추가 ---
@@ -158,11 +133,7 @@ async def crawl_website_content(self, url: str, query: str = None): # query를 �
             logger.warning("HTML 내용이 비어있어 텍스트를 추출할 수 없습니다.")
             extracted_text = "HTML 내용을 가져오지 못했습니다."
 
-    except asyncio.TimeoutError as e_timeout: # Python의 asyncio.TimeoutError
-        logger.error(f"페이지 로드 또는 작업 시간 초과: {url}, 오류: {e_timeout}")
-        # self.retry(exc=e_timeout) # Celery 재시도
-        extracted_text = f"페이지 로드 또는 작업 시간 초과: {e_timeout}"
-    except PlaywrightError as e_playwright: # Playwright의 공통 Error
+    except PlaywrightError as e_playwright: # Playwright의 공통 Error (asyncio.TimeoutError는 동기 컨텍스트에서 직접 발생하지 않음)
         logger.error(f"Playwright 오류 발생: {url}, 오류: {e_playwright}")
         if "net::ERR_CONNECTION_REFUSED" in str(e_playwright):
              logger.error("대상 서버에 연결할 수 없습니다. URL을 확인하거나 네트워크 상태를 점검하세요.")
