@@ -16,12 +16,13 @@ app = FastAPI()
 
 # CORS 미들웨어 추가 시작
 origins = [
-    "http://cvfactory.dev",
-    "https://cvfactory.dev", # HTTPS도 고려
-    "http://localhost",
-    "http://localhost:80", # CVFactory가 실행될 수 있는 기본 포트
-    "http://127.0.0.1",
-    "http://127.0.0.1:80",
+    "*", # 모든 출처 허용 (테스트 목적)
+    # "http://cvfactory.dev",
+    # "https://cvfactory.dev", # HTTPS도 고려
+    # "http://localhost",
+    # "http://localhost:80", # CVFactory가 실행될 수 있는 기본 포트
+    # "http://127.0.0.1",
+    # "http://127.0.0.1:80",
     # 필요하다면 CVFactory 개발서버가 사용하는 다른 포트도 추가 (예: 3000, 5000 등)
 ]
 
