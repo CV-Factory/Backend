@@ -1,10 +1,10 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from tasks import perform_processing # Celery 작업 임포트
-from celery.result import AsyncResult # 작업 결과 조회를 위해 임포트
+from pydantic import BaseModel, HttpUrl
+from celery_tasks import perform_processing, open_url_with_playwright_inspector
+from celery.result import AsyncResult
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -32,6 +32,17 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("FastAPI 애플리케이션 종료")
+
+@app.post("/launch-inspector", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
+async def launch_playwright_inspector_task(url: HttpUrl = Query(..., description="Playwright Inspector를 실행할 URL")):
+    logger.info(f"Playwright Inspector 실행 요청: URL='{url}'")
+    try:
+        task = open_url_with_playwright_inspector.delay(str(url))
+        logger.info(f"Playwright Inspector 작업 시작됨. Task ID: {task.id}")
+        return TaskStatusResponse(task_id=task.id, status="PENDING")
+    except Exception as e:
+        logger.error(f"Playwright Inspector 작업 시작 중 오류 발생: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error starting Playwright Inspector task: {str(e)}")
 
 @app.post("/process", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
 async def start_processing_task(request: ProcessRequest):

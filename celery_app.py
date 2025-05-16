@@ -13,10 +13,10 @@ logger.info(f"Celery: REDIS_URL='{REDIS_URL}'")
 
 try:
     celery_app = Celery(
-        'tasks', # 현재 모듈의 이름 또는 임의의 이름
+        'tasks', # 현재 모듈의 이름 또는 임의의 이름 (유지하거나 celery_tasks로 변경 가능)
         broker=REDIS_URL,
         backend=REDIS_URL,
-        include=['tasks']  # 작업 함수가 포함된 모듈 (tasks.py)
+        include=['celery_tasks']  # 작업 함수가 포함된 모듈을 celery_tasks.py로 변경
     )
     logger.info("Celery app instance created successfully.")
 except Exception as e:
