@@ -2,6 +2,7 @@ import os
 import logging
 from fastapi import FastAPI, HTTPException, status, Query
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from typing import Any
 from celery_tasks import perform_processing, open_url_with_playwright_inspector, extract_body_html_from_url, extract_text_from_html_file, format_text_file
@@ -12,6 +13,26 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# CORS 미들웨어 추가 시작
+origins = [
+    "http://cvfactory.dev",
+    "https://cvfactory.dev", # HTTPS도 고려
+    "http://localhost",
+    "http://localhost:80", # CVFactory가 실행될 수 있는 기본 포트
+    "http://127.0.0.1",
+    "http://127.0.0.1:80",
+    # 필요하다면 CVFactory 개발서버가 사용하는 다른 포트도 추가 (예: 3000, 5000 등)
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins, # 특정 출처 허용, 개발 중에는 ["*"] 사용도 가능
+    allow_credentials=True,
+    allow_methods=["*"], # 모든 HTTP 메소드 허용
+    allow_headers=["*"], # 모든 헤더 허용
+)
+# CORS 미들웨어 추가 끝
 
 # Gemini API 키 설정은 tasks.py 또는 celery_app.py 내부, 혹은 환경변수를 통해 관리
 # 여기서는 직접 설정하지 않습니다.
