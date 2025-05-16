@@ -4,7 +4,9 @@ from playwright.sync_api import sync_playwright
 import os
 import re
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
+import hashlib
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -14,19 +16,41 @@ IFRAME_LOAD_TIMEOUT = 15000  # iframe 로드 타임아웃 (밀리초)
 ELEMENT_HANDLE_TIMEOUT = 5000 # element handle 가져오기 타임아웃 (밀리초)
 
 def sanitize_filename(url: str) -> str:
-    """URL을 안전한 파일 이름으로 변환합니다."""
+    """URL을 기반으로 짧고 안전한 파일 이름을 생성합니다."""
     try:
-        filename = url.replace("https://", "").replace("http://", "")
-        filename = re.sub(r'[\\/*?:"<>|&%=]', "_", filename)
-        # 파일 이름 길이 제한 (OS 및 파일 시스템에 따라 다를 수 있음)
-        if len(filename) > 200:
-            filename = filename[:200]
-        logger.debug(f"Sanitized filename: {filename}")
-        return filename
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc.replace('www.', '') # 'www.' 제거
+        # 경로와 쿼리에서 일부 유의미한 부분을 추출 (필요에 따라 로직 수정)
+        # 여기서는 간단히 경로와 쿼리 문자열을 합쳐 사용
+        path_and_query = parsed_url.path + parsed_url.query
+        
+        # 고유성을 위한 짧은 해시값 생성 (URL 전체 사용)
+        url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()[:8] # URL 전체의 짧은 MD5 해시값
+        
+        # 도메인 + 유의미한 부분 (간단화) + 해시값 조합
+        # 유의미한 부분은 경로/쿼리에서 비알파벳/숫자를 _로 바꾸고 짧게 자름
+        sanitized_part = re.sub(r'[^a-zA-Z0-9]', '_', path_and_query)
+        sanitized_part = '_'.join(part for part in sanitized_part.split('_') if part)[:30] # 각 부분 합쳐서 짧게
+
+        # 최종 파일 이름 형식: domain_sanitizedpart_hash
+        # 예: jobkorea_Recruit_GI_Read_hash.html
+        if sanitized_part:
+            base_name = f"{domain}_{sanitized_part}_{url_hash}"
+        else:
+            base_name = f"{domain}_{url_hash}"
+            
+        # 파일 이름 길이 제한은 유지 (더 짧게 생성되겠지만 안전을 위해)
+        if len(base_name) > 150: # 기존 200에서 좀 더 줄임
+            base_name = base_name[:150]
+            
+        logger.debug(f"Generated base filename for '{url}': {base_name}")
+        return base_name.lower() # 소문자로 변환
+
     except Exception as e:
-        logger.error(f"Error sanitizing filename for URL \'{url}\': {e}", exc_info=True)
-        # 오류 발생 시 대체 파일명 사용
-        return "error_sanitizing_filename.html"
+        logger.error(f"Error generating filename for URL '{url}': {e}", exc_info=True)
+        # 오류 발생 시 대체 파일명 사용 (타임스탬프 추가)
+        timestamp = int(time.time())
+        return f"error_filename_{timestamp}"
 
 def _flatten_iframes_in_live_dom(current_playwright_context, # Playwright Page 또는 Frame 객체
                                  current_depth: int,
