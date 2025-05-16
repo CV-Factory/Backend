@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI, HTTPException, status, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
-from celery_tasks import perform_processing, open_url_with_playwright_inspector
+from celery_tasks import perform_processing, open_url_with_playwright_inspector, extract_body_html_from_url
 from celery.result import AsyncResult
 
 # 로깅 설정
@@ -43,6 +43,17 @@ async def launch_playwright_inspector_task(url: HttpUrl = Query(..., description
     except Exception as e:
         logger.error(f"Playwright Inspector 작업 시작 중 오류 발생: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error starting Playwright Inspector task: {str(e)}")
+
+@app.post("/extract-body", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
+async def start_extract_body_task(url: HttpUrl = Query(..., description="Body HTML을 추출할 전체 URL")):
+    logger.info(f"Body HTML 추출 요청: URL='{url}'")
+    try:
+        task = extract_body_html_from_url.delay(str(url))
+        logger.info(f"Body HTML 추출 작업 시작됨. Task ID: {task.id}")
+        return TaskStatusResponse(task_id=task.id, status="PENDING")
+    except Exception as e:
+        logger.error(f"Body HTML 추출 작업 시작 중 오류 발생: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error starting body HTML extraction task: {str(e)}")
 
 @app.post("/process", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
 async def start_processing_task(request: ProcessRequest):

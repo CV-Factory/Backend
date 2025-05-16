@@ -1,8 +1,220 @@
 from celery_app import celery_app
 import logging
 from playwright.sync_api import sync_playwright
+import os
+import re
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
+
+# 상수 정의
+MAX_IFRAME_DEPTH = 3  # iframe 최대 재귀 깊이
+IFRAME_LOAD_TIMEOUT = 15000  # iframe 로드 타임아웃 (밀리초)
+ELEMENT_HANDLE_TIMEOUT = 5000 # element handle 가져오기 타임아웃 (밀리초)
+
+def sanitize_filename(url: str) -> str:
+    """URL을 안전한 파일 이름으로 변환합니다."""
+    try:
+        filename = url.replace("https://", "").replace("http://", "")
+        filename = re.sub(r'[\\/*?:"<>|&%=]', "_", filename)
+        # 파일 이름 길이 제한 (OS 및 파일 시스템에 따라 다를 수 있음)
+        if len(filename) > 200:
+            filename = filename[:200]
+        logger.debug(f"Sanitized filename: {filename}")
+        return filename
+    except Exception as e:
+        logger.error(f"Error sanitizing filename for URL \'{url}\': {e}", exc_info=True)
+        # 오류 발생 시 대체 파일명 사용
+        return "error_sanitizing_filename.html"
+
+def _flatten_iframes_in_live_dom(current_playwright_context, # Playwright Page 또는 Frame 객체
+                                 current_depth: int,
+                                 max_depth: int,
+                                 original_page_url_for_logging: str):
+    """
+    현재 Playwright 컨텍스트(페이지 또는 프레임) 내의 iframe들을 재귀적으로 평탄화합니다.
+    iframe의 내용을 가져와 원래 iframe 태그를 DOM에서 교체합니다.
+    """
+    if current_depth > max_depth:
+        logger.warning(f"Max iframe depth {max_depth} reached for a frame within {original_page_url_for_logging} (context URL: {current_playwright_context.url if hasattr(current_playwright_context, 'url') else 'N/A'}). Stopping recursion for this branch.")
+        return
+
+    processed_iframe_count_at_this_level = 0
+    while True:
+        # 아직 처리되지 않았거나 오류로 표시되지 않은 iframe을 찾습니다.
+        iframe_locator = current_playwright_context.locator('iframe:not([data-cvf-error="true"])').first
+        
+        try:
+            # 처리할 iframe이 더 있는지 확인합니다.
+            if iframe_locator.count() == 0:
+                logger.info(f"No more processable iframes found at depth {current_depth} for {original_page_url_for_logging} (context URL: {current_playwright_context.url if hasattr(current_playwright_context, 'url') else 'N/A'}).")
+                break 
+        except Exception as e:
+            logger.warning(f"Error checking iframe count at depth {current_depth} for {original_page_url_for_logging} (context URL: {current_playwright_context.url if hasattr(current_playwright_context, 'url') else 'N/A'}): {e}. Assuming no iframes left.")
+            break # 안전을 위해 현재 레벨의 루프 종료
+
+        iframe_handle = None
+        try:
+            iframe_handle = iframe_locator.element_handle(timeout=ELEMENT_HANDLE_TIMEOUT)
+            if not iframe_handle:
+                logger.warning(f"Located an iframe but could not get its element_handle at depth {current_depth} for {original_page_url_for_logging}. Breaking loop for this level.")
+                break # 현재 레벨의 루프 종료
+
+            processed_iframe_count_at_this_level += 1
+            iframe_src_for_log = iframe_handle.get_attribute('src') or "[src not found]"
+            logger.info(f"Processing iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}) at depth {current_depth} (context URL: {current_playwright_context.url if hasattr(current_playwright_context, 'url') else 'N/A'}).")
+
+            child_frame = iframe_handle.content_frame()
+            
+            if not child_frame:
+                logger.warning(f"Could not get content_frame for iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}). Marking and skipping.")
+                iframe_handle.evaluate("el => el.setAttribute('data-cvf-error', 'true')")
+                continue # 다음 while 루프 반복 (다른 iframe.first 찾기)
+
+            # 자식 프레임 내부의 iframe들을 재귀적으로 처리
+            _flatten_iframes_in_live_dom(child_frame, current_depth + 1, max_depth, original_page_url_for_logging)
+            
+            # 자식 프레임의 (이제는 평탄화된) 내용을 가져옵니다.
+            child_frame_html_content = ""
+            try:
+                child_frame.wait_for_load_state('domcontentloaded', timeout=IFRAME_LOAD_TIMEOUT)
+                child_frame_html_content = child_frame.content()
+            except Exception as frame_content_err:
+                logger.error(f"Error getting content from child_frame (URL: {child_frame.url}, src: {iframe_src_for_log[:100]}, depth: {current_depth + 1}): {frame_content_err}", exc_info=True)
+                iframe_handle.evaluate("el => el.setAttribute('data-cvf-error', 'true')") # 부모 iframe 태그를 에러로 표시
+                continue
+
+            replacement_html_string = ""
+            if not child_frame_html_content:
+                logger.warning(f"Child frame (URL: {child_frame.url}, src: {iframe_src_for_log[:100]}, depth: {current_depth + 1}) returned empty content.")
+                replacement_html_string = f"<!-- Iframe (src: {iframe_src_for_log[:200]}) content was empty -->"
+            else:
+                try:
+                    child_soup = BeautifulSoup(child_frame_html_content, 'html.parser')
+                    content_to_insert_bs = child_soup.body if child_soup.body else child_soup
+                    replacement_html_string = content_to_insert_bs.prettify() if content_to_insert_bs else f"<!-- Iframe (src: {iframe_src_for_log[:200]}) content could not be prettified -->"
+                except Exception as bs_parse_err:
+                    logger.error(f"Error parsing/prettifying child frame content (URL: {child_frame.url}, src: {iframe_src_for_log[:100]}): {bs_parse_err}", exc_info=True)
+                    replacement_html_string = f"<!-- Error processing iframe content (src: {iframe_src_for_log[:200]}): {str(bs_parse_err)}. Raw content snippet: {child_frame_html_content[:200]} -->"
+            
+            # 원래 iframe 태그를 DOM에서 교체합니다.
+            try:
+                logger.info(f"Attempting to replace iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}) with its content at depth {current_depth}.")
+                iframe_handle.evaluate("function(el, html) { el.outerHTML = html; }", replacement_html_string)
+                logger.info(f"Successfully replaced iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}) at depth {current_depth}.")
+            except Exception as eval_error:
+                logger.error(f"Failed to replace iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}) in DOM using evaluate: {eval_error}", exc_info=True)
+                try: 
+                    iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true') }")
+                except Exception as mark_err:
+                    logger.error(f"Failed to mark iframe (src: {iframe_src_for_log[:100]}) as error after evaluate failed: {mark_err}", exc_info=True)
+        
+        except Exception as e:
+            logger.error(f"Outer error processing an iframe at depth {current_depth} for {original_page_url_for_logging} (context URL: {current_playwright_context.url if hasattr(current_playwright_context, 'url') else 'N/A'}): {e}", exc_info=True)
+            if iframe_handle: # 에러 발생 시 핸들이 있다면 마킹 시도
+                try: iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true') }")
+                except: pass 
+            # 현재 레벨의 iframe 처리 루프를 중단하고 다음 단계로 넘어가지 않도록 합니다 (예: 상위 레벨로 돌아감).
+            # 또는, 상황에 따라 break 대신 continue를 사용하여 다른 iframe 처리를 시도할 수 있으나,
+            # 예측 불가능한 동작을 피하기 위해 여기서는 break로 현재 레벨 처리를 중단합니다.
+            logger.warning(f"Breaking iframe processing loop at depth {current_depth} due to an error.")
+            break 
+
+        finally:
+            if iframe_handle:
+                try: iframe_handle.dispose()
+                except: pass # dispose 오류는 무시
+
+    logger.info(f"Finished iframe processing at depth {current_depth} for {original_page_url_for_logging}. Processed {processed_iframe_count_at_this_level} direct iframe(s) at this level.")
+
+@celery_app.task(name='celery_tasks.extract_body_html_from_url')
+def extract_body_html_from_url(url: str):
+    """
+    Playwright를 사용하여 지정된 URL의 <body> 내부 전체 HTML을 가져와 파일에 저장합니다.
+    iframe 내부 컨텐츠를 재귀적으로 파싱하여 부모 HTML에 통합합니다.
+    """
+    logger.info(f"Attempting to extract body HTML from URL: {url} with iframe processing.")
+    try:
+        with sync_playwright() as p:
+            browser = None
+            try:
+                browser = p.chromium.launch(headless=True) # 헤드리스 모드로 실행
+                logger.info(f"Playwright browser launched: {browser.version}")
+            except Exception as browser_launch_error:
+                logger.error(f"Failed to launch Playwright chromium browser: {browser_launch_error}", exc_info=True)
+                try:
+                    logger.info("Attempting to launch Firefox as a fallback.")
+                    browser = p.firefox.launch(headless=True)
+                    logger.info(f"Playwright Firefox browser launched: {browser.version}")
+                except Exception as firefox_launch_error:
+                    logger.error(f"Failed to launch Playwright Firefox browser: {firefox_launch_error}", exc_info=True)
+                    raise ConnectionError(f"Failed to launch any Playwright browser. Last error (Firefox): {firefox_launch_error}") from firefox_launch_error
+            
+            page = None
+            try:
+                page = browser.new_page()
+                logger.info(f"New page created. Navigating to URL: {url}")
+                page.goto(url, timeout=90000, wait_until='domcontentloaded') 
+                logger.info(f"Successfully navigated to URL: {url}")
+
+                # iframe 평탄화 시작
+                logger.info(f"Starting to flatten iframes for URL: {url}")
+                _flatten_iframes_in_live_dom(page, 0, MAX_IFRAME_DEPTH, url)
+                logger.info(f"Finished flattening iframes for URL: {url}")
+
+                # DOM 수정 후 최종 페이지 내용 가져오기
+                final_full_html_content = page.content()
+                logger.info(f"Successfully retrieved final full page content for URL: {url} after iframe processing. Content length: {len(final_full_html_content)}")
+
+                soup = BeautifulSoup(final_full_html_content, 'html.parser')
+                body_content_tag = soup.body
+                if body_content_tag:
+                    body_html = body_content_tag.prettify() 
+                    logger.info(f"Successfully extracted body HTML for URL: {url}. Body HTML length: {len(body_html)}")
+                else:
+                    logger.warning(f"Could not find body tag in the final page content for URL: {url}. Using full HTML.")
+                    # body가 없으면 전체 HTML을 사용하거나, 에러 처리를 할 수 있습니다. 여기서는 전체 HTML을 사용합니다.
+                    body_html = soup.prettify() if soup else "<!-- BeautifulSoup found no content -->"
+
+                logs_dir = "logs"
+                if not os.path.exists(logs_dir):
+                    try:
+                        os.makedirs(logs_dir)
+                        logger.info(f"Created directory: {logs_dir}")
+                    except OSError as e:
+                        logger.error(f"Error creating directory {logs_dir}: {e}", exc_info=True)
+                        logs_dir = "." 
+
+                sanitized_name = sanitize_filename(url)
+                file_path = os.path.join(logs_dir, f"body_html_recursive_{sanitized_name}.html") # 파일명 변경
+                
+                try:
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(body_html)
+                    logger.info(f"Recursively processed body HTML successfully saved to: {file_path}")
+                    return f"Recursively processed body HTML from {url} saved to {file_path}"
+                except IOError as e:
+                    logger.error(f"Failed to write HTML to file {file_path}: {e}", exc_info=True)
+                    raise
+
+            except Exception as page_error:
+                logger.error(f"Error during Playwright page operations or iframe processing for URL \'{url}\': {page_error}", exc_info=True)
+                raise
+            finally:
+                if page:
+                    try: page.close(); logger.info(f"Page closed for URL: {url}")
+                    except Exception as e: logger.warning(f"Error closing page for URL \'{url}\': {e}", exc_info=True)
+                if browser and browser.is_connected():
+                    try: browser.close(); logger.info("Playwright browser closed.")
+                    except Exception as e: logger.warning(f"Error closing browser: {e}", exc_info=True)
+                        
+    except ConnectionError as conn_err: 
+        logger.error(f"Playwright browser connection error while processing {url}: {conn_err}", exc_info=True)
+        raise
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in extract_body_html_from_url (recursive) for URL \'{url}\': {e}", exc_info=True)
+        raise
 
 @celery_app.task(name='celery_tasks.open_url_with_playwright_inspector')
 def open_url_with_playwright_inspector(url: str):
