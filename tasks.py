@@ -2,7 +2,7 @@ import time
 import logging
 import asyncio
 # import asyncio # asyncio 임포트
-from celery_app import app as celery_app
+from celery_app import celery_app as celery_app
 # from playwright.async_api import async_playwright, Playwright # Playwright 임포트
 from bs4 import BeautifulSoup # BeautifulSoup 임포트
 # import google.generativeai as genai # Gemini API
