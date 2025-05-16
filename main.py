@@ -3,7 +3,8 @@ import logging
 from fastapi import FastAPI, HTTPException, status, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
-from celery_tasks import perform_processing, open_url_with_playwright_inspector, extract_body_html_from_url
+from typing import Any
+from celery_tasks import perform_processing, open_url_with_playwright_inspector, extract_body_html_from_url, extract_text_from_html_file, format_text_file
 from celery.result import AsyncResult
 
 # 로깅 설정
@@ -22,7 +23,7 @@ class ProcessRequest(BaseModel):
 class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
-    result: dict | None = None
+    result: Any | None = None
 
 @app.on_event("startup")
 async def startup_event():
@@ -54,6 +55,40 @@ async def start_extract_body_task(url: HttpUrl = Query(..., description="Body HT
     except Exception as e:
         logger.error(f"Body HTML 추출 작업 시작 중 오류 발생: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error starting body HTML extraction task: {str(e)}")
+
+@app.post("/extract-text-from-html", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
+async def start_extract_text_task(file_name: str = Query(..., description=".html 파일에서 텍스트를 추출할 파일 이름 (logs 디렉토리 내 위치)")):
+    logger.info(f"HTML에서 텍스트 추출 요청: file_name='{file_name}'")
+    if not file_name.endswith(".html"):
+        logger.warning(f"잘못된 파일 확장자 요청: {file_name}. .html 파일이어야 합니다.")
+        raise HTTPException(status_code=400, detail="Invalid file extension. Please provide an .html file name.")
+    try:
+        task = extract_text_from_html_file.delay(file_name)
+        logger.info(f"HTML에서 텍스트 추출 작업 시작됨. Task ID: {task.id}")
+        return TaskStatusResponse(task_id=task.id, status="PENDING")
+    except FileNotFoundError as fnf_error: # Celery 작업 내에서 파일 못찾을 경우 대비
+        logger.error(f"텍스트 추출 작업 시작 중 파일 찾기 오류: {fnf_error}", exc_info=True)
+        raise HTTPException(status_code=404, detail=str(fnf_error))
+    except Exception as e:
+        logger.error(f"HTML에서 텍스트 추출 작업 시작 중 오류 발생: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error starting text extraction from HTML task: {str(e)}")
+
+@app.post("/format-text-file", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
+async def start_format_text_file_task(file_name: str = Query(..., description=".txt 파일의 내용을 50자 단위로 줄바꿈하여 재포맷할 파일 이름 (logs 디렉토리 내 위치)")):
+    logger.info(f"텍스트 파일 재포맷 요청: file_name='{file_name}'")
+    if not file_name.endswith(".txt"):
+        logger.warning(f"잘못된 파일 확장자 요청: {file_name}. .txt 파일이어야 합니다.")
+        raise HTTPException(status_code=400, detail="Invalid file extension. Please provide a .txt file name.")
+    try:
+        task = format_text_file.delay(file_name)
+        logger.info(f"텍스트 파일 재포맷 작업 시작됨. Task ID: {task.id}")
+        return TaskStatusResponse(task_id=task.id, status="PENDING")
+    except FileNotFoundError as fnf_error:
+        logger.error(f"텍스트 파일 재포맷 작업 시작 중 파일 찾기 오류: {fnf_error}", exc_info=True)
+        raise HTTPException(status_code=404, detail=str(fnf_error))
+    except Exception as e:
+        logger.error(f"텍스트 파일 재포맷 작업 시작 중 오류 발생: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error starting text file formatting task: {str(e)}")
 
 @app.post("/process", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
 async def start_processing_task(request: ProcessRequest):

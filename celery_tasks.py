@@ -281,6 +281,122 @@ def open_url_with_playwright_inspector(url: str):
 # 예시:
 @celery_app.task(name='celery_tasks.perform_processing')
 def perform_processing(target_url: str, query: str | None = None):
-    logger.info(f"perform_processing_stub called with URL: {target_url}, Query: {query}")
-    # 여기에 실제 처리 로직 구현
-    return {"url": target_url, "query": query, "status": "processed_stub"} 
+    logger.info(f"perform_processing 작업 시작: target_url='{target_url}', query='{query}'")
+    # 여기에 실제 처리 로직을 추가하세요.
+    # 예: 웹 스크래핑, 데이터 분석 등
+    result_message = f"Processing completed for {target_url} with query '{query}'"
+    logger.info(result_message)
+    return result_message
+
+@celery_app.task(name='celery_tasks.extract_text_from_html_file')
+def extract_text_from_html_file(html_file_name: str):
+    """
+    logs 디렉토리에 저장된 HTML 파일에서 순수 텍스트를 추출하여 .txt 파일로 저장합니다.
+    html_file_name: logs 디렉토리 내의 HTML 파일 이름 (예: 'body_html_recursive_some_url.html')
+    """
+    logger.info(f"Attempting to extract text from HTML file: {html_file_name}")
+    logs_dir = "logs"
+    html_file_path = os.path.join(logs_dir, html_file_name)
+
+    if not os.path.exists(html_file_path):
+        error_msg = f"HTML file not found: {html_file_path}"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
+
+    try:
+        logger.debug(f"Reading HTML file: {html_file_path}")
+        with open(html_file_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        logger.info(f"Successfully read HTML file: {html_file_path}. Content length: {len(html_content)}")
+
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # 스크립트 및 스타일 태그 제거 (선택 사항)
+        for script_or_style in soup(["script", "style"]):
+            script_or_style.decompose()
+            logger.debug(f"Removed tag: <{script_or_style.name}>")
+
+        text_content = soup.get_text(separator="\\n", strip=True) # 각 텍스트 조각을 새 줄로 분리하고, 양쪽 공백 제거
+        logger.info(f"Successfully extracted text content. Text length: {len(text_content)}")
+
+        base_name, _ = os.path.splitext(html_file_name)
+        txt_file_name = f"{base_name}.txt"
+        txt_file_path = os.path.join(logs_dir, txt_file_name)
+
+        logger.debug(f"Writing extracted text to: {txt_file_path}")
+        with open(txt_file_path, "w", encoding="utf-8") as f:
+            f.write(text_content)
+        
+        success_msg = f"Text content extracted from {html_file_name} and saved to {txt_file_path}"
+        logger.info(success_msg)
+        return success_msg
+
+    except FileNotFoundError: # 위에서 이미 처리했지만, 이중 확인
+        raise
+    except IOError as e:
+        error_msg = f"IOError during text extraction from {html_file_name}: {e}"
+        logger.error(error_msg, exc_info=True)
+        raise
+    except Exception as e:
+        error_msg = f"An unexpected error occurred during text extraction from {html_file_name}: {e}"
+        logger.error(error_msg, exc_info=True)
+        raise
+
+@celery_app.task(name='celery_tasks.format_text_file')
+def format_text_file(original_txt_file_name: str):
+    """
+    logs 디렉토리에 있는 .txt 파일의 내용을 읽어 50자마다 줄바꿈을 추가하고,
+    _formatted.txt 접미사를 붙여 새로운 파일로 저장합니다.
+    original_txt_file_name: logs 디렉토리 내의 원본 .txt 파일 이름
+    """
+    logger.info(f"Attempting to format text file: {original_txt_file_name}")
+    logs_dir = "logs"
+    original_file_path = os.path.join(logs_dir, original_txt_file_name)
+
+    if not os.path.exists(original_file_path):
+        error_msg = f"Original text file not found: {original_file_path}"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
+
+    try:
+        logger.debug(f"Reading original text file: {original_file_path}")
+        with open(original_file_path, "r", encoding="utf-8") as f:
+            original_text_content = f.read()
+        logger.info(f"Successfully read original text file: {original_file_path}. Content length: {len(original_text_content)}")
+
+        # 기존 줄바꿈을 기준으로 먼저 분리하고, 각 줄에 대해 50자 처리를 할 수도 있으나,
+        # 여기서는 전체 텍스트를 하나의 긴 문자열로 보고 50자마다 줄바꿈을 삽입합니다.
+        # 먼저 기존 줄바꿈 문자를 공백으로 대체하여 한 줄로 만듭니다 (선택 사항).
+        # text_for_formatting = original_text_content.replace("\\n", " ")
+        text_for_formatting = original_text_content # 또는 기존 줄바꿈 유지
+
+        formatted_lines = []
+        for i in range(0, len(text_for_formatting), 50):
+            formatted_lines.append(text_for_formatting[i:i+50])
+        
+        formatted_text_content = "\\n".join(formatted_lines)
+        logger.info(f"Successfully formatted text content. New length: {len(formatted_text_content)}")
+
+        base_name, ext = os.path.splitext(original_txt_file_name)
+        # formatted_txt_file_name = f"{base_name}_formatted{ext}" # 이전 파일명 방식
+        formatted_txt_file_name = f"{base_name}_formatted.txt" # 명시적으로 .txt 사용
+        formatted_file_path = os.path.join(logs_dir, formatted_txt_file_name)
+
+        logger.debug(f"Writing formatted text to: {formatted_file_path}")
+        with open(formatted_file_path, "w", encoding="utf-8") as f:
+            f.write(formatted_text_content)
+        
+        success_msg = f"Text content from {original_txt_file_name} was formatted and saved to {formatted_file_path}"
+        logger.info(success_msg)
+        return success_msg
+
+    except FileNotFoundError: # 위에서 이미 처리했지만, 이중 확인
+        raise
+    except IOError as e:
+        error_msg = f"IOError during text formatting for {original_txt_file_name}: {e}"
+        logger.error(error_msg, exc_info=True)
+        raise
+    except Exception as e:
+        error_msg = f"An unexpected error occurred during text formatting for {original_txt_file_name}: {e}"
+        logger.error(error_msg, exc_info=True)
+        raise 
