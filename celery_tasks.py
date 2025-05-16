@@ -388,6 +388,14 @@ def format_text_file(original_txt_file_name: str):
         
         success_msg = f"Text content from {original_txt_file_name} was formatted and saved to {formatted_file_path}"
         logger.info(success_msg)
+
+        # 원본 파일 삭제 로직 추가
+        try:
+            os.remove(original_file_path)
+            logger.info(f"Successfully deleted original file: {original_file_path}")
+        except OSError as e:
+            logger.warning(f"Could not delete original file {original_file_path}: {e}", exc_info=True)
+        
         return success_msg
 
     except FileNotFoundError: # 위에서 이미 처리했지만, 이중 확인
