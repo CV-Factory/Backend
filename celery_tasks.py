@@ -316,7 +316,7 @@ def extract_text_from_html_file(html_file_name: str):
             script_or_style.decompose()
             logger.debug(f"Removed tag: <{script_or_style.name}>")
 
-        text_content = soup.get_text(separator="\\n", strip=True) # 각 텍스트 조각을 새 줄로 분리하고, 양쪽 공백 제거
+        text_content = soup.get_text(separator='\n', strip=True) # 수정: separator='\n'
         logger.info(f"Successfully extracted text content. Text length: {len(text_content)}")
 
         base_name, _ = os.path.splitext(html_file_name)
@@ -374,7 +374,7 @@ def format_text_file(original_txt_file_name: str):
         for i in range(0, len(text_for_formatting), 50):
             formatted_lines.append(text_for_formatting[i:i+50])
         
-        formatted_text_content = "\\n".join(formatted_lines)
+        formatted_text_content = "\n".join(formatted_lines) # 이 부분을 수정합니다.
         logger.info(f"Successfully formatted text content. New length: {len(formatted_text_content)}")
 
         base_name, ext = os.path.splitext(original_txt_file_name)
