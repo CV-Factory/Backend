@@ -202,36 +202,49 @@ def perform_processing(self, target_url: str, query: str):
     task_id = self.request.id
     logger.info(f"[Task ID: {task_id}] 처리 시작: URL='{target_url}', Query='{query}'")
 
-    crawled_text = ""
-    html_content = "" # html_content 초기화
+    crawled_data = {}
+    final_result_text = ""
+
     try:
-        # 1. Playwright를 사용한 크롤링 (디버깅용 동기 함수 호출)
-        logger.info(f"[Task ID: {task_id}] 디버깅용 동기 크롤링 작업 시작")
-        # 디버깅용 동기 함수 호출
-        crawled_text, html_content = crawl_website_content(target_url, query)
-        logger.info(f"[Task ID: {task_id}] 디버깅용 동기 크롤링 작업 완료.")
+        # 1. Playwright를 사용한 크롤링 작업 호출 및 결과 대기
+        logger.info(f"[Task ID: {task_id}] crawl_website_content 작업 호출")
+        # crawl_website_content 태스크를 호출하고 결과를 동기적으로 얻음
+        # .get()을 사용하여 결과를 기다립니다. timeout 설정도 가능합니다.
+        result = crawl_website_content.delay(target_url, query)
+        crawled_data = result.get(timeout=300) # 5분 타임아웃
+        
+        if not crawled_data:
+            logger.warning(f"[Task ID: {task_id}] crawl_website_content 작업에서 반환된 데이터가 없습니다.")
+            return {"status": "error", "original_url": target_url, "query": query, "result": "크롤링 작업에서 데이터를 반환하지 못했습니다."}
+
+        crawled_text = crawled_data.get("content", "")
+        html_content_length = crawled_data.get("html_content_length", 0)
+
+        logger.info(f"[Task ID: {task_id}] crawl_website_content 작업 완료. 추출된 텍스트 길이: {len(crawled_text)}, HTML 길이: {html_content_length}")
         
         if not crawled_text:
-             logger.warning(f"[Task ID: {task_id}] 크롤링된 내용이 없습니다. (디버그 모드)")
-             # Inspector 사용 시에는 결과 반환이 중요하지 않으므로 간단히 로그만 남길 수 있습니다.
-             return {"status": "debug_no_content", "original_url": target_url, "query": query, "result": "No content crawled during debug."}
-
-        # 크롤링 결과 파일 저장 (디버깅 중에는 이 부분은 생략하거나 간단히 할 수 있음)
-        # ... (기존 파일 저장 로직, 필요시 주석 처리 또는 경로 수정) ...
-        logger.info(f"[{task_id}] (디버그 모드) 크롤링 텍스트 길이: {len(crawled_text)}")
-
+             logger.warning(f"[Task ID: {task_id}] 크롤링된 내용이 없습니다.")
+             return {"status": "no_content", "original_url": target_url, "query": query, "result": "크롤링된 콘텐츠가 없습니다."}
 
         # 2. RAG 파이프라인 (Langchain + Gemini) (디버깅 중에는 플레이스홀더 사용)
-        logger.info(f"[Task ID: {task_id}] (디버그 모드) RAG 및 LLM 처리 시작")
-        final_result = f"DEBUG MODE - RAG/LLM processing placeholder for query '{query}' with crawled content (length: {len(crawled_text)})"
-        logger.info(f"[Task ID: {task_id}] (디버그 모드) RAG 및 LLM 처리 (플레이스홀더) 완료.")
+        logger.info(f"[Task ID: {task_id}] RAG 및 LLM 처리 시작")
+        # 여기서 crawled_text를 사용하여 LLM 처리를 수행합니다.
+        # 예시: final_result_text = call_llm_model(crawled_text, query)
+        final_result_text = f"LLM processed result for query '{query}' based on crawled content (length: {len(crawled_text)})"
+        logger.info(f"[Task ID: {task_id}] RAG 및 LLM 처리 완료.")
 
-        return {"status": "debug_success", "original_url": target_url, "query": query, "result": final_result}
+        return {"status": "success", "original_url": target_url, "query": query, "result": final_result_text, "crawled_text_snippet": crawled_text[:200]}
 
+    except celery_app.backend.TimeoutError: # Celery의 TimeoutError
+        logger.error(f"[Task ID: {task_id}] crawl_website_content 작업 결과 대기 시간 초과.", exc_info=True)
+        self.update_state(state='FAILURE', meta={'error': 'Subtask Timeout'})
+        # raise # 여기서 다시 raise하면 task가 FAILURE 상태로 최종 처리됨
+        return {"status": "error", "original_url": target_url, "query": query, "result": "크롤링 하위 작업 시간 초과"}
     except Exception as e:
-        logger.error(f"[Task ID: {task_id}] 작업 처리 중 예상치 못한 최상위 오류 발생: {e}", exc_info=True)
+        logger.error(f"[Task ID: {task_id}] 작업 처리 중 예상치 못한 오류 발생: {e}", exc_info=True)
         self.update_state(state='FAILURE', meta={'error': str(e)})
-        raise
+        # raise
+        return {"status": "error", "original_url": target_url, "query": query, "result": f"작업 처리 중 오류: {str(e)}"}
 
 # 기존 asyncio.run() 예시 래퍼 함수는 위 main 태스크 내에서 직접 asyncio.run()을 사용하므로 필요 없어졌습니다.
 # 하지만 복잡한 비동기 로직을 분리하고 싶다면 계속 사용할 수 있습니다.
