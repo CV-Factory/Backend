@@ -183,12 +183,9 @@ def perform_processing(self, target_url: str, query: str = None): # query를 선
     final_result_text = ""
 
     try:
-        # 1. Playwright를 사용한 크롤링 작업 호출 및 결과 대기
-        logger.info(f"[Task ID: {task_id}] crawl_website_content 작업 호출")
-        # crawl_website_content 태스크를 호출하고 결과를 동기적으로 얻음
-        # .get()을 사용하여 결과를 기다립니다. timeout 설정도 가능합니다.
-        result = crawl_website_content.delay(target_url, query)
-        crawled_data = result.get(timeout=300) # 5분 타임아웃
+        # 1. crawl_website_content 함수를 직접 호출하여 결과를 받음
+        logger.info(f"[Task ID: {task_id}] crawl_website_content 함수 직접 호출")
+        crawled_data = crawl_website_content(target_url, query) # 직접 함수 호출로 변경
         
         if not crawled_data:
             logger.warning(f"[Task ID: {task_id}] crawl_website_content 작업에서 반환된 데이터가 없습니다.")
