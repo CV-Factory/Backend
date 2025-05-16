@@ -24,8 +24,11 @@ logger = get_task_logger(__name__)
 # Playwright를 사용하여 웹사이트 내용을 비동기적으로 크롤링하는 함수
 # async def crawl_website_content(url: str): # 비동기 함수 선언 주석 처리
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-async def crawl_website_content(self, url: str, query: str):
-    logger.info(f"크롤링 시작: {url}, 쿼리: {query}")
+async def crawl_website_content(self, url: str, query: str = None): # query를 선택적 인자로 변경
+    log_message_prefix = f"URL: {url}"
+    if query:
+        log_message_prefix += f", Query: {query}"
+    logger.info(f"크롤링 시작: {log_message_prefix}")
     html_content = ""
     extracted_text = ""
     # playwright_version = get_playwright_version()
@@ -172,7 +175,7 @@ async def crawl_website_content(self, url: str, query: str):
         extracted_text = f"알 수 없는 오류: {e}"
     
     finally:
-        logger.info(f"크롤링 완료: {url}, 추출된 텍스트 길이: {len(extracted_text)}")
+        logger.info(f"크롤링 완료: {log_message_prefix}, 추출된 텍스트 길이: {len(extracted_text)}")
         # 디버깅을 위해 추출된 텍스트의 일부를 로깅
         # logger.debug(f"추출된 텍스트 (일부): {extracted_text[:500]}")
 
@@ -197,10 +200,13 @@ async def crawl_website_content(self, url: str, query: str):
 #         raise
 
 @celery_app.task(bind=True, name='tasks.perform_processing')
-def perform_processing(self, target_url: str, query: str):
+def perform_processing(self, target_url: str, query: str = None): # query를 선택적 인자로 변경
     """메인 처리 작업을 수행하는 Celery 태스크"""
     task_id = self.request.id
-    logger.info(f"[Task ID: {task_id}] 처리 시작: URL='{target_url}', Query='{query}'")
+    log_message_prefix = f"[Task ID: {task_id}] 처리 시작: URL='{target_url}'"
+    if query:
+        log_message_prefix += f", Query='{query}'"
+    logger.info(log_message_prefix)
 
     crawled_data = {}
     final_result_text = ""
@@ -227,11 +233,15 @@ def perform_processing(self, target_url: str, query: str):
              return {"status": "no_content", "original_url": target_url, "query": query, "result": "크롤링된 콘텐츠가 없습니다."}
 
         # 2. RAG 파이프라인 (Langchain + Gemini) (디버깅 중에는 플레이스홀더 사용)
-        logger.info(f"[Task ID: {task_id}] RAG 및 LLM 처리 시작")
-        # 여기서 crawled_text를 사용하여 LLM 처리를 수행합니다.
-        # 예시: final_result_text = call_llm_model(crawled_text, query)
-        final_result_text = f"LLM processed result for query '{query}' based on crawled content (length: {len(crawled_text)})"
-        logger.info(f"[Task ID: {task_id}] RAG 및 LLM 처리 완료.")
+        if query: # query가 있는 경우에만 LLM 처리 수행
+            logger.info(f"[Task ID: {task_id}] RAG 및 LLM 처리 시작")
+            # 여기서 crawled_text를 사용하여 LLM 처리를 수행합니다.
+            # 예시: final_result_text = call_llm_model(crawled_text, query)
+            final_result_text = f"LLM processed result for query '{query}' based on crawled content (length: {len(crawled_text)})"
+            logger.info(f"[Task ID: {task_id}] RAG 및 LLM 처리 완료.")
+        else: # query가 없는 경우 크롤링된 텍스트 자체를 결과로 사용 (또는 HTML 내용)
+            logger.info(f"[Task ID: {task_id}] Query가 제공되지 않아 LLM 처리를 건너뛰고 크롤링된 내용을 반환합니다.")
+            final_result_text = crawled_text # 또는 crawled_data["html_content"] 등 필요에 따라
 
         return {"status": "success", "original_url": target_url, "query": query, "result": final_result_text, "crawled_text_snippet": crawled_text[:200]}
 

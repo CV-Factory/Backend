@@ -17,7 +17,7 @@ app = FastAPI()
 
 class ProcessRequest(BaseModel):
     target_url: str
-    query: str
+    query: str | None = None
 
 class TaskStatusResponse(BaseModel):
     task_id: str
@@ -35,7 +35,10 @@ async def shutdown_event():
 
 @app.post("/process", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
 async def start_processing_task(request: ProcessRequest):
-    logger.info(f"요청 수신 (비동기 작업 시작): URL='{request.target_url}', Query='{request.query}'")
+    log_message_prefix = f"요청 수신 (비동기 작업 시작): URL='{request.target_url}'"
+    if request.query:
+        log_message_prefix += f", Query='{request.query}'"
+    logger.info(log_message_prefix)
     try:
         # Celery 작업 호출 (.delay()는 .apply_async()의 단축형)
         task = perform_processing.delay(request.target_url, request.query)
