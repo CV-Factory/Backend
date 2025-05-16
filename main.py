@@ -112,7 +112,7 @@ async def start_format_text_file_task(file_name: str = Query(..., description=".
         logger.error(f"텍스트 파일 재포맷 작업 시작 중 오류 발생: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error starting text file formatting task: {str(e)}")
 
-@app.post("/process", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
+@app.post("/", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
 async def start_processing_task(request: ProcessRequest):
     log_message_prefix = f"요청 수신 (비동기 작업 시작): URL='{request.target_url}'"
     if request.query:
