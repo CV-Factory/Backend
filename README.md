@@ -8,16 +8,20 @@
 
 ## 📖 Overview
 
-This repository contains the backend server for the CVFactory project. It is responsible for handling API requests, processing data, and managing background tasks using Celery. The server is designed to be containerized using Docker.
+This repository contains the backend server for the CVFactory project, designed for processing and extracting information from web pages and other text sources, particularly for generating content like CVs. It handles API requests, performs web scraping (using Playwright), parses HTML (using BeautifulSoup), extracts and formats text, and manages these operations as background tasks using Celery with Redis.
 
 ## 🛠 Tech Stack
 
 | Category | Technologies |
 |----------|--------------|
-| Language | Python |
-| Framework | FastAPI (or similar) |
-| Background Tasks | Celery, Redis |
-| Database | (Specify database if used) |
+| Language | Python 3.x |
+| Web Framework | FastAPI |
+| Asynchronous Tasks | Celery |
+| Task Broker/Backend | Redis |
+| Web Scraping/Automation | Playwright |
+| HTML Parsing | BeautifulSoup4 |
+| Data Handling | Pydantic (for request/response models) |
+| Logging | Standard Python `logging` |
 | Containerization | Docker, Docker Compose |
 
 ## 🚀 Getting Started
@@ -37,27 +41,39 @@ This repository contains the backend server for the CVFactory project. It is res
 docker-compose up --build
 ```
 
-This will start the web server and the Celery worker.
+This command builds the Docker image (installing Python dependencies and Playwright browsers as defined in the `Dockerfile`) and then starts three services:
+- `redis`: The Redis server for Celery.
+- `web`: The FastAPI web server, handling API requests.
+- `worker`: The Celery worker, processing background tasks.
 
 ## 🖥 Usage
 
-The server will be accessible via the port specified in the `docker-compose.yml` file. You can interact with the API endpoints.
+The FastAPI server will be accessible via the port mapped in the `docker-compose.yml` file (default: `8001`). You can interact with the defined API endpoints to initiate tasks. Tasks are processed asynchronously by the Celery worker.
 
-Background tasks managed by Celery will be processed automatically.
+Key Endpoints:
+- `POST /`: Initiate the main processing task for a given URL and optional query.
+- `POST /launch-inspector`: Launch Playwright inspector for a URL (useful for debugging scraping).
+- `POST /extract-body`: Initiate task to extract `<body>` HTML from a URL, including flattening iframes.
+- `POST /extract-text-from-html`: Initiate task to extract text content from a saved HTML file in the `logs` directory.
+- `POST /format-text-file`: Initiate task to reformat a text file in the `logs` directory (e.g., wrapping lines).
+- `GET /tasks/{task_id}`: Check the status and result of a submitted Celery task.
+
+Logs and extracted files will be saved to the `logs/` directory, which is mapped as a volume in `docker-compose.yml`.
 
 ## 📁 Project Structure
 
 ```
 .
-├── main.py           # Main entry point for the web server
-├── celery_app.py     # Celery application configuration
-├── celery_tasks.py   # Background tasks definitions
-├── Dockerfile        # Docker image definition
-├── docker-compose.yml# Docker services configuration
-├── requirements.txt  # Python dependencies
-├── entrypoint.sh     # Container startup script
-├── logs/             # Log directory
-└── README_ko.md      # Korean README
+├── main.py           # FastAPI application entry point and API endpoints
+├── celery_app.py     # Celery application instance configuration
+├── celery_tasks.py   # Definitions of Celery background tasks (web scraping, parsing, formatting, etc.)
+├── Dockerfile        # Defines the Docker image for web and worker services (includes dependencies and Playwright setup)
+├── docker-compose.yml# Defines and configures the multi-container Docker application (web, worker, redis)
+├── requirements.txt  # Lists Python dependencies required by the project
+├── entrypoint.sh     # Script executed inside containers to start either the web server or the Celery worker
+├── logs/             # Directory for application logs and generated files (mounted as a volume)
+├── LICENSE           # License file (CC BY NC 4.0)
+└── README_ko.md      # Korean README file
 ```
 
 ## 📄 License

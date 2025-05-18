@@ -8,16 +8,20 @@
 
 ## 📖 개요
 
-이 저장소는 CVFactory 프로젝트의 백엔드 서버 코드를 포함합니다. API 요청 처리, 데이터 가공, 그리고 Celery를 사용한 백그라운드 작업 관리를 담당합니다. 서버는 Docker를 사용하여 컨테이너화되도록 설계되었습니다.
+이 저장소는 CVFactory 프로젝트의 백엔드 서버 코드를 포함하며, 주로 웹 페이지 및 기타 텍스트 소스에서 정보를 처리하고 추출하여 CV와 같은 콘텐츠를 생성하는 데 사용됩니다. API 요청을 처리하고, 웹 스크래핑(Playwright 사용), HTML 파싱(BeautifulSoup 사용), 텍스트 추출 및 형식화 작업을 수행하며, 이러한 작업들을 Redis와 함께 Celery를 사용하여 백그라운드 태스크로 관리합니다.
 
 ## 🛠 기술 스택
 
 | 분류 | 기술 요소 |
 |----------|--------------|
-| 언어 | Python |
-| 프레임워크 | FastAPI (또는 유사) |
-| 백그라운드 작업 | Celery, Redis |
-| 데이터베이스 | (사용하는 경우 데이터베이스 명시) |
+| 언어 | Python 3.x |
+| 웹 프레임워크 | FastAPI |
+| 비동기 태스크 | Celery |
+| 태스크 브로커/백엔드 | Redis |
+| 웹 스크래핑/자동화 | Playwright |
+| HTML 파싱 | BeautifulSoup4 |
+| 데이터 처리 | Pydantic (요청/응답 모델용) |
+| 로깅 | 표준 Python `logging` |
 | 컨테이너화 | Docker, Docker Compose |
 
 ## 🚀 시작하기
@@ -37,27 +41,39 @@
 docker-compose up --build
 ```
 
-이렇게 하면 웹 서버와 Celery 워커가 시작됩니다.
+이 명령어는 Docker 이미지를 빌드하고(`Dockerfile`에 정의된 Python 종속성 및 Playwright 브라우저 설치 포함), 다음 세 가지 서비스를 시작합니다:
+- `redis`: Celery를 위한 Redis 서버.
+- `web`: FastAPI 웹 서버, API 요청 처리.
+- `worker`: Celery 워커, 백그라운드 태스크 처리.
 
 ## 🖥 사용법
 
-서버는 `docker-compose.yml` 파일에 지정된 포트를 통해 접근 가능합니다. API 엔드포인트와 상호작용할 수 있습니다.
+FastAPI 서버는 `docker-compose.yml` 파일에 매핑된 포트(`8001` 기본값)를 통해 접근 가능합니다. 정의된 API 엔드포인트와 상호작용하여 태스크를 시작할 수 있습니다. 태스크는 Celery 워커에 의해 비동기적으로 처리됩니다.
 
-Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩니다.
+주요 엔드포인트:
+- `POST /`: 주어진 URL 및 선택적 쿼리에 대한 메인 처리 태스크를 시작합니다.
+- `POST /launch-inspector`: URL에 대해 Playwright inspector를 실행합니다 (스크래핑 디버깅에 유용).
+- `POST /extract-body`: iframe 평탄화를 포함하여 URL에서 `<body>` HTML을 추출하는 태스크를 시작합니다.
+- `POST /extract-text-from-html`: `logs` 디렉토리에 저장된 HTML 파일에서 텍스트 내용을 추출하는 태스크를 시작합니다.
+- `POST /format-text-file`: `logs` 디렉토리에 있는 텍스트 파일을 재포맷하는 태스크를 시작합니다 (예: 줄 바꿈).
+- `GET /tasks/{task_id}`: 제출된 Celery 태스크의 상태 및 결과를 확인합니다.
+
+로그 및 추출된 파일은 `docker-compose.yml`에 볼륨으로 매핑된 `logs/` 디렉토리에 저장됩니다.
 
 ## 📁 프로젝트 구조
 
 ```
 .
-├── main.py           # 웹 서버의 메인 진입점
-├── celery_app.py     # Celery 애플리케이션 설정
-├── celery_tasks.py   # 백그라운드 작업 정의
-├── Dockerfile        # Docker 이미지 정의
-├── docker-compose.yml# Docker 서비스 설정
-├── requirements.txt  # Python 종속성
-├── entrypoint.sh     # 컨테이너 시작 스크립트
-├── logs/             # 로그 디렉토리
-└── README.md         # English README
+├── main.py           # FastAPI 애플리케이션 진입점 및 API 엔드포인트
+├── celery_app.py     # Celery 애플리케이션 인스턴스 설정
+├── celery_tasks.py   # Celery 백그라운드 태스크 정의 (웹 스크래핑, 파싱, 형식화 등)
+├── Dockerfile        # 웹 및 워커 서비스용 Docker 이미지 정의 (종속성 및 Playwright 설정 포함)
+├── docker-compose.yml# 다중 컨테이너 Docker 애플리케이션 정의 및 설정 (web, worker, redis)
+├── requirements.txt  # 프로젝트에 필요한 Python 종속성 목록
+├── entrypoint.sh     # 컨테이너 내부에서 웹 서버 또는 Celery 워커를 시작하기 위해 실행되는 스크립트
+├── logs/             # 애플리케이션 로그 및 생성된 파일을 위한 디렉토리 (볼륨으로 마운트됨)
+├── LICENSE           # 라이선스 파일 (CC BY NC 4.0)
+└── README.md         # 영어 README 파일
 ```
 
 ## 📄 라이선스
