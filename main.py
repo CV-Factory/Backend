@@ -39,8 +39,8 @@ app.add_middleware(
 # 여기서는 직접 설정하지 않습니다.
 
 class ProcessRequest(BaseModel):
-    target_url: str
-    query: str | None = None
+    job_url: str
+    user_story: str | None = None
 
 class TaskStatusResponse(BaseModel):
     task_id: str
@@ -114,13 +114,13 @@ async def start_format_text_file_task(file_name: str = Query(..., description=".
 
 @app.post("/", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
 async def start_processing_task(request: ProcessRequest):
-    log_message_prefix = f"요청 수신 (비동기 작업 시작): URL='{request.target_url}'"
-    if request.query:
-        log_message_prefix += f", Query='{request.query}'"
+    log_message_prefix = f"요청 수신 (비동기 작업 시작): URL='{request.job_url}'"
+    if request.user_story:
+        log_message_prefix += f", UserStory='{request.user_story}'"
     logger.info(log_message_prefix)
     try:
         # Celery 작업 호출 (.delay()는 .apply_async()의 단축형)
-        task = perform_processing.delay(request.target_url, request.query)
+        task = perform_processing.delay(request.job_url, request.user_story)
         logger.info(f"Celery 작업 시작됨. Task ID: {task.id}")
         return TaskStatusResponse(task_id=task.id, status="PENDING")
     except Exception as e:

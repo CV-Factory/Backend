@@ -304,25 +304,25 @@ def open_url_with_playwright_inspector(url: str):
 
 # 예시:
 @celery_app.task(name='celery_tasks.perform_processing')
-def perform_processing(target_url: str, query: str | None = None):
-    logger.info(f"perform_processing 작업 시작: target_url='{target_url}', query='{query}'")
+def perform_processing(job_url: str, user_story: str | None = None):
+    logger.info(f"perform_processing 작업 시작: job_url='{job_url}', user_story='{user_story}'")
     
     try:
         # extract_body_html_from_url 함수를 직접 호출하여 HTML 추출 및 저장
         # 이 함수는 성공 시 저장된 파일 경로를 포함한 메시지를 반환하거나, 실패 시 예외를 발생시킴
-        file_save_result = extract_body_html_from_url(target_url)
+        file_save_result = extract_body_html_from_url(job_url)
         logger.info(f"HTML 추출 및 저장 결과: {file_save_result}")
         
-        # 추가적으로 query를 사용하는 로직이 있다면 여기에 구현
-        # 예: 추출된 HTML을 바탕으로 query를 이용한 분석 등
+        # 추가적으로 user_story를 사용하는 로직이 있다면 여기에 구현
+        # 예: 추출된 HTML을 바탕으로 user_story를 이용한 분석 등
         
         # 최종 결과 메시지 (필요에 따라 file_save_result를 포함하도록 수정 가능)
-        result_message = f"Successfully processed {target_url}. HTML saved. Query was: '{query}'"
+        result_message = f"Successfully processed {job_url}. HTML saved. UserStory was: '{user_story}'"
         logger.info(result_message)
         return result_message
         
     except Exception as e:
-        logger.error(f"perform_processing 작업 중 오류 발생 (URL: {target_url}, Query: {query}): {e}", exc_info=True)
+        logger.error(f"perform_processing 작업 중 오류 발생 (URL: {job_url}, UserStory: {user_story}): {e}", exc_info=True)
         # 에러 발생 시 Celery가 태스크를 실패로 처리하도록 예외를 다시 발생시킴
         # FastAPI에서 HTTP 응답을 직접 만들 수 없으므로, Celery 예외로 처리되도록 raise e를 사용하거나,
         # 혹은 커스텀 예외를 정의하여 처리할 수 있습니다.
