@@ -80,10 +80,6 @@ Logs and extracted files will be saved to the `logs/` directory, which is mapped
 
 CC BY NC 4.0
 
-## 🤝 Team
-
-(Specify team members or contributors here)
-
 ## 📬 Contact
 
 (Specify contact information here, e.g., email or project links)
