@@ -8,9 +8,22 @@
 
 ## 📖 Overview
 
-This repository contains the backend server for the CVFactory project, designed for processing and extracting information from web pages and other text sources, particularly for generating content like CVs.
-It handles API requests, performs web scraping (using Playwright), parses HTML (using BeautifulSoup), extracts and formats text, and manages these operations as background tasks using Celery with Redis.
-It also includes a script for generating cover letters leveraging Retrieval-Augmented Generation (RAG) with Langchain, utilizing Vector Embeddings (FAISS) and Cohere for embeddings, and Google Generative AI (Gemini) for text generation.
+This repository contains the backend server for the CVFactory project.
+It's designed for processing and extracting information from web pages and other text sources, particularly for generating content like CVs.
+The server handles API requests and performs several key operations:
+- **Web Scraping/Crawling**: Utilizes Playwright to dynamically fetch and render web pages, enabling the extraction of content even from JavaScript-heavy sites. It can recursively navigate through iframes to gather comprehensive HTML data, as seen in tasks like `extract_body_html_recursive`.
+- **HTML Parsing**: Employs BeautifulSoup to parse the fetched HTML, allowing for targeted extraction of text and structured data.
+- **Text Processing**: Includes functionalities for cleaning and formatting extracted text, preparing it for further use or storage.
+- **Background Task Management**: Leverages Celery with Redis as a message broker to manage these potentially long-running operations (scraping, parsing, formatting) asynchronously, ensuring the API remains responsive.
+- **Large Language Model (LLM) Integration**: Incorporates Google's Gemini API (via `ChatGoogleGenerativeAI` in Langchain) to generate application-specific text, such as cover letters. The LLM is prompted with contextually relevant information to produce desired outputs.
+- **Retrieval-Augmented Generation (RAG)**: Implements a RAG pipeline using Langchain to enhance the LLM's context understanding for tasks like cover letter generation. This involves:
+    - Loading job posting text (e.g., from `logs/` directory).
+    - Chunking the text (e.g., using `SemanticChunker` or `RecursiveCharacterTextSplitter`).
+    - Generating embeddings for these chunks using Cohere (via `CohereEmbeddings`).
+    - Storing these embeddings in a FAISS vector store for efficient similarity searches.
+    - Retrieving relevant text chunks based on user queries or task requirements and providing them as augmented context to the Gemini LLM, enabling more informed and relevant text generation.
+
+The overall goal is to automate parts of the CV and cover letter creation process by intelligently extracting information and leveraging generative AI.
 
 ## 🛠 Tech Stack
 
