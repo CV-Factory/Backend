@@ -8,7 +8,7 @@
 
 ## 📖 Overview
 
-This repository contains the backend server for the CVFactory project, designed for processing and extracting information from web pages and other text sources, particularly for generating content like CVs. It handles API requests, performs web scraping (using Playwright), parses HTML (using BeautifulSoup), extracts and formats text, and manages these operations as background tasks using Celery with Redis.
+This repository contains the backend server for the CVFactory project, designed for processing and extracting information from web pages and other text sources, particularly for generating content like CVs. It handles API requests, performs web scraping (using Playwright), parses HTML (using BeautifulSoup), extracts and formats text, and manages these operations as background tasks using Celery with Redis. **It also includes a script for generating cover letters leveraging Retrieval-Augmented Generation (RAG) with Langchain, utilizing Vector Embeddings (FAISS) and Cohere for embeddings, and Google Generative AI (Gemini) for text generation.**
 
 ## 🛠 Tech Stack
 
@@ -23,6 +23,7 @@ This repository contains the backend server for the CVFactory project, designed 
 | Data Handling | Pydantic (for request/response models) |
 | Logging | Standard Python `logging` |
 | Containerization | Docker, Docker Compose |
+| **AI/ML & RAG** | **Langchain, Google Generative AI (Gemini), Cohere (for Embeddings), FAISS (Vector Store)** |
 
 ## 🚀 Getting Started
 

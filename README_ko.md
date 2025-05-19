@@ -8,7 +8,7 @@
 
 ## 📖 개요
 
-이 저장소는 CVFactory 프로젝트의 백엔드 서버 코드를 포함하며, 주로 웹 페이지 및 기타 텍스트 소스에서 정보를 처리하고 추출하여 CV와 같은 콘텐츠를 생성하는 데 사용됩니다. API 요청을 처리하고, 웹 스크래핑(Playwright 사용), HTML 파싱(BeautifulSoup 사용), 텍스트 추출 및 형식화 작업을 수행하며, 이러한 작업들을 Redis와 함께 Celery를 사용하여 백그라운드 태스크로 관리합니다. 또한, **채용공고 기반 자기소개서 생성 스크립트**도 포함하고 있습니다.
+이 저장소는 CVFactory 프로젝트의 백엔드 서버 코드를 포함하며, 주로 웹 페이지 및 기타 텍스트 소스에서 정보를 처리하고 추출하여 CV와 같은 콘텐츠를 생성하는 데 사용됩니다. API 요청을 처리하고, 웹 스크래핑(Playwright 사용), HTML 파싱(BeautifulSoup 사용), 텍스트 추출 및 형식화 작업을 수행하며, 이러한 작업들을 Redis와 함께 Celery를 사용하여 백그라운드 태스크로 관리합니다. 또한, **Langchain을 활용하여 검색 증강 생성(RAG) 방식으로 자기소개서를 생성하는 스크립트를 포함하며, 벡터 임베딩(FAISS)과 Cohere를 임베딩에 사용하고 Google Generative AI(Gemini)를 텍스트 생성에 활용합니다.**
 
 ## 🛠 기술 스택
 
@@ -23,6 +23,7 @@
 | 데이터 처리 | Pydantic (요청/응답 모델용) |
 | 로깅 | 표준 Python `logging` |
 | 컨테이너화 | Docker, Docker Compose |
+| **AI/ML & RAG** | **Langchain, Google Generative AI (Gemini), Cohere (임베딩용), FAISS (벡터 저장소)** |
 
 ## 🚀 시작하기
 
