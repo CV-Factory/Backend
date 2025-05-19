@@ -19,6 +19,8 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
     entrypoint: ["/app/entrypoint.sh", "web"]
+    volumes:
+      - .:/app
     depends_on:
       - redis
     restart: always
@@ -29,13 +31,13 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
     entrypoint: ["/app/entrypoint.sh", "worker"]
+    volumes:
+      - .:/app
     depends_on:
       - redis
     restart: always
     tty: true
     stdin_open: true
-    volumes:
-      - ./logs:/app/logs
 
 volumes:
   redisdata: 
