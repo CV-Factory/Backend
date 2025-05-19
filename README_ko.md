@@ -25,7 +25,8 @@ API 요청을 처리하고, 웹 스크래핑(Playwright 사용), HTML 파싱(Bea
 | 데이터 처리 | Pydantic (요청/응답 모델용) |
 | 로깅 | 표준 Python `logging` |
 | 컨테이너화 | Docker, Docker Compose |
-| AI/ML & RAG | Langchain, Google Generative AI (Gemini), Cohere (임베딩용), FAISS (벡터 저장소) |
+| AI/ML | Langchain, Google Generative AI (Gemini), Cohere (임베딩용) |
+| RAG | FAISS (벡터 저장소) |
 
 ## 🚀 시작하기
 

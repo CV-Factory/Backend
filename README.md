@@ -25,7 +25,8 @@ It also includes a script for generating cover letters leveraging Retrieval-Augm
 | Data Handling | Pydantic (for request/response models) |
 | Logging | Standard Python `logging` |
 | Containerization | Docker, Docker Compose |
-| AI/ML & RAG | Langchain, Google Generative AI (Gemini), Cohere (for Embeddings), FAISS (Vector Store) |
+| AI/ML | Langchain, Google Generative AI (Gemini), Cohere (for Embeddings) |
+| RAG | FAISS (Vector Store) |
 
 ## 🚀 Getting Started
 
