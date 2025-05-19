@@ -8,7 +8,7 @@
 
 ## 📖 개요
 
-이 저장소는 CVFactory 프로젝트의 백엔드 서버 코드를 포함하며, 주로 웹 페이지 및 기타 텍스트 소스에서 정보를 처리하고 추출하여 CV와 같은 콘텐츠를 생성하는 데 사용됩니다. API 요청을 처리하고, 웹 스크래핑(Playwright 사용), HTML 파싱(BeautifulSoup 사용), 텍스트 추출 및 형식화 작업을 수행하며, 이러한 작업들을 Redis와 함께 Celery를 사용하여 백그라운드 태스크로 관리합니다.
+이 저장소는 CVFactory 프로젝트의 백엔드 서버 코드를 포함하며, 주로 웹 페이지 및 기타 텍스트 소스에서 정보를 처리하고 추출하여 CV와 같은 콘텐츠를 생성하는 데 사용됩니다. API 요청을 처리하고, 웹 스크래핑(Playwright 사용), HTML 파싱(BeautifulSoup 사용), 텍스트 추출 및 형식화 작업을 수행하며, 이러한 작업들을 Redis와 함께 Celery를 사용하여 백그라운드 태스크로 관리합니다. 또한, **채용공고 기반 자기소개서 생성 스크립트**도 포함하고 있습니다.
 
 ## 🛠 기술 스택
 
@@ -30,12 +30,19 @@
 
 - Docker
 - Docker Compose
+- **Conda (자기소개서 생성 스크립트 실행용)**
 
 ### 설치 방법
 
 1. 저장소를 클론합니다.
 2. `CVFactory_Server` 디렉토리로 이동합니다.
-3. Docker Compose를 사용하여 Docker 컨테이너를 빌드하고 실행합니다:
+3. **(선택 사항) 자기소개서 생성 스크립트 실행을 위한 Conda 환경을 생성하고 활성화합니다:**
+```bash
+conda create -n cvfactory_env python=3.10 -y
+conda activate cvfactory_env
+pip install google-generativeai langchain langchain-community faiss-cpu cohere python-dotenv langchain-experimental langchain-google-genai langchain-cohere --upgrade
+```
+4. Docker Compose를 사용하여 Docker 컨테이너를 빌드하고 실행합니다:
 
 ```bash
 docker-compose up --build
@@ -48,17 +55,24 @@ docker-compose up --build
 
 ## 🖥 사용법
 
-FastAPI 서버는 `docker-compose.yml` 파일에 매핑된 포트(`8001` 기본값)를 통해 접근 가능합니다. 정의된 API 엔드포인트와 상호작용하여 태스크를 시작할 수 있습니다. 태스크는 Celery 워커에 의해 비동기적으로 처리됩니다.
+FastAPI 서버는 `docker-compose.yml` 파일에 매핑된 포트(`8001` 기본값)를 통해 접근 가능합니다. 정의된 API 엔드포인트와 상호작용하여 태스크를 시작할 수 있습니다.
 
-주요 엔드포인트:
-- `POST /`: 주어진 URL 및 선택적 쿼리에 대한 메인 처리 태스크를 시작합니다.
-- `POST /launch-inspector`: URL에 대해 Playwright inspector를 실행합니다 (스크래핑 디버깅에 유용).
-- `POST /extract-body`: iframe 평탄화를 포함하여 URL에서 `<body>` HTML을 추출하는 태스크를 시작합니다.
-- `POST /extract-text-from-html`: `logs` 디렉토리에 저장된 HTML 파일에서 텍스트 내용을 추출하는 태스크를 시작합니다.
-- `POST /format-text-file`: `logs` 디렉토리에 있는 텍스트 파일을 재포맷하는 태스크를 시작합니다 (예: 줄 바꿈).
-- `GET /tasks/{task_id}`: 제출된 Celery 태스크의 상태 및 결과를 확인합니다.
+Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩니다.
 
-로그 및 추출된 파일은 `docker-compose.yml`에 볼륨으로 매핑된 `logs/` 디렉토리에 저장됩니다.
+**자기소개서 생성 스크립트 사용법:**
+
+설치 단계에서 생성한 Conda 환경을 사용하여 자기소개서 생성 스크립트를 실행하려면:
+
+1.  `CVFactory_Server` 디렉토리로 이동합니다.
+2.  Conda 환경을 활성화합니다:
+    ```bash
+    conda activate cvfactory_env
+    ```
+3.  `logs/` 디렉토리에 있는 포맷팅된 채용공고 텍스트 파일의 경로를 지정하여 스크립트를 실행합니다:
+    ```bash
+    python generate_cover_letter_semantic.py
+    ```
+    생성된 자기소개서는 터미널에 출력되고 `logs/generated_cover_letter_formatted.txt` 파일에 저장됩니다.
 
 ## 📁 프로젝트 구조
 
@@ -73,7 +87,8 @@ FastAPI 서버는 `docker-compose.yml` 파일에 매핑된 포트(`8001` 기본�
 ├── entrypoint.sh     # 컨테이너 내부에서 웹 서버 또는 Celery 워커를 시작하기 위해 실행되는 스크립트
 ├── logs/             # 애플리케이션 로그 및 생성된 파일을 위한 디렉토리 (볼륨으로 마운트됨)
 ├── LICENSE           # 라이선스 파일 (CC BY NC 4.0)
-└── README.md         # 영어 README 파일
+├── README.md         # 영어 README 파일
+└── **generate_cover_letter_semantic.py**: RAG 및 Gemini API를 활용한 자기소개서 생성 스크립트입니다.
 ```
 
 ## 📄 라이선스
@@ -82,4 +97,4 @@ CC BY NC 4.0
 
 ## 📬 문의
 
-(여기에 문의 정보를 명시하세요, 예: 이메일 또는 프로젝트 링크) 
+wintrover@gmail.com 
