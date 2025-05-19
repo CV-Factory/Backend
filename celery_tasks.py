@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import hashlib
 import time
+from generate_cover_letter_semantic import generate_cover_letter
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,7 @@ def extract_body_html_from_url(url: str):
     """
     Playwright를 사용하여 지정된 URL의 <body> 내부 전체 HTML을 가져와 파일에 저장합니다.
     iframe 내부 컨텐츠를 재귀적으로 파싱하여 부모 HTML에 통합합니다.
+    파일 저장 후, 저장된 파일의 상대 경로를 반환합니다.
     """
     logger.info(f"Attempting to extract body HTML from URL: {url} with iframe processing.")
     try:
@@ -182,12 +184,10 @@ def extract_body_html_from_url(url: str):
                 page.goto(url, timeout=90000, wait_until='domcontentloaded') 
                 logger.info(f"Successfully navigated to URL: {url}")
 
-                # iframe 평탄화 시작
                 logger.info(f"Starting to flatten iframes for URL: {url}")
                 _flatten_iframes_in_live_dom(page, 0, MAX_IFRAME_DEPTH, url)
                 logger.info(f"Finished flattening iframes for URL: {url}")
 
-                # DOM 수정 후 최종 페이지 내용 가져오기
                 final_full_html_content = page.content()
                 logger.info(f"Successfully retrieved final full page content for URL: {url} after iframe processing. Content length: {len(final_full_html_content)}")
 
@@ -198,28 +198,30 @@ def extract_body_html_from_url(url: str):
                     logger.info(f"Successfully extracted body HTML for URL: {url}. Body HTML length: {len(body_html)}")
                 else:
                     logger.warning(f"Could not find body tag in the final page content for URL: {url}. Using full HTML.")
-                    # body가 없으면 전체 HTML을 사용하거나, 에러 처리를 할 수 있습니다. 여기서는 전체 HTML을 사용합니다.
                     body_html = soup.prettify() if soup else "<!-- BeautifulSoup found no content -->"
 
-                logs_dir = "logs"
-                if not os.path.exists(logs_dir):
+                logs_dir_name = "logs" # 디렉토리 이름만
+                if not os.path.exists(logs_dir_name):
                     try:
-                        os.makedirs(logs_dir)
-                        logger.info(f"Created directory: {logs_dir}")
+                        os.makedirs(logs_dir_name)
+                        logger.info(f"Created directory: {logs_dir_name}")
                     except OSError as e:
-                        logger.error(f"Error creating directory {logs_dir}: {e}", exc_info=True)
-                        logs_dir = "." 
+                        logger.error(f"Error creating directory {logs_dir_name}: {e}", exc_info=True)
+                        # logs_dir_name = "." # 현재 디렉토리에 저장하는 대신 오류 발생
+                        raise # 디렉토리 생성 실패 시 오류 발생시킴
 
                 sanitized_name = sanitize_filename(url)
-                file_path = os.path.join(logs_dir, f"body_html_recursive_{sanitized_name}.html") # 파일명 변경
+                # 저장될 파일의 이름 (logs 디렉토리 제외)
+                file_basename = f"body_html_recursive_{sanitized_name}.html"
+                absolute_file_path = os.path.join(logs_dir_name, file_basename)
                 
                 try:
-                    with open(file_path, "w", encoding="utf-8") as f:
+                    with open(absolute_file_path, "w", encoding="utf-8") as f:
                         f.write(body_html)
-                    logger.info(f"Recursively processed body HTML successfully saved to: {file_path}")
-                    return f"Recursively processed body HTML from {url} saved to {file_path}"
+                    logger.info(f"Recursively processed body HTML successfully saved to: {absolute_file_path}")
+                    return file_basename # logs 디렉토리 기준 상대 경로 (파일명) 반환
                 except IOError as e:
-                    logger.error(f"Failed to write HTML to file {file_path}: {e}", exc_info=True)
+                    logger.error(f"Failed to write HTML to file {absolute_file_path}: {e}", exc_info=True)
                     raise
 
             except Exception as page_error:
@@ -298,153 +300,149 @@ def open_url_with_playwright_inspector(url: str):
         logger.error(f"An unexpected error occurred in open_url_with_playwright_inspector for URL '{url}': {e}", exc_info=True)
         raise
 
-@celery_app.task(name='celery_tasks.perform_processing')
-def perform_processing(job_url: str, user_story: str | None = None):
-    logger.info(f"perform_processing 작업 시작: job_url='{job_url}', user_story='{user_story}'")
-    
+@celery_app.task(name='celery_tasks.perform_processing', bind=True)
+def perform_processing(self, job_url: str, user_story: str | None = None):
+    task_id = self.request.id
+    logger.info(f"Task {task_id}: perform_processing 시작, job_url: {job_url}")
+
+    if not job_url:
+        logger.error(f"Task {task_id}: job_url이 제공되지 않았습니다.")
+        self.update_state(state='FAILURE', meta={'exc_type': 'ValueError', 'exc_message': 'job_url is required'})
+        raise ValueError("job_url is required")
+
+    logger.info(f"Task {task_id}: 사용자 스토리 (앞부분): {user_story[:100] if user_story else 'N/A'}...")
+
     try:
-        # 1. HTML 추출 및 저장
-        html_extraction_result = extract_body_html_from_url(job_url)
-        logger.info(f"HTML 추출 및 저장 결과: {html_extraction_result}")
+        # 1. URL에서 HTML 스크래핑 및 저장
+        logger.info(f"Task {task_id}: 1단계: {job_url} 에서 HTML 추출 시도")
+        html_file_basename = extract_body_html_from_url(job_url) # .func 제거
+        if not html_file_basename:
+            logger.error(f"Task {task_id}: HTML 추출 실패 (extract_body_html_from_url 반환값 없음)")
+            self.update_state(state='FAILURE', meta={'exc_type': 'RuntimeError', 'exc_message': 'Failed to extract HTML content.'})
+            raise RuntimeError("Failed to extract HTML content.")
+        logger.info(f"Task {task_id}: HTML 추출 성공, 파일명: {html_file_basename}")
 
-        # 저장된 HTML 파일 이름 추출 (예: "logs/body_html_recursive_some_url.html")
-        # "saved to " 문자열을 기준으로 분리하고, 뒷부분을 가져온 후 공백 제거
-        saved_html_file_path = html_extraction_result.split("saved to ", 1)[1].strip()
-        html_file_name = os.path.basename(saved_html_file_path) # 파일 이름만 추출
-        logger.info(f"추출된 HTML 파일명: {html_file_name}")
+        # 2. HTML 파일에서 텍스트 추출 및 저장
+        logger.info(f"Task {task_id}: 2단계: {html_file_basename} 에서 텍스트 추출 시도")
+        text_file_basename = extract_text_from_html_file(html_file_basename) # .func 제거
+        if not text_file_basename:
+            logger.error(f"Task {task_id}: 텍스트 추출 실패 (extract_text_from_html_file 반환값 없음)")
+            self.update_state(state='FAILURE', meta={'exc_type': 'RuntimeError', 'exc_message': 'Failed to extract text from HTML.'})
+            raise RuntimeError("Failed to extract text from HTML.")
+        logger.info(f"Task {task_id}: 텍스트 추출 성공, 파일명: {text_file_basename}")
 
-        # 2. HTML에서 텍스트 추출 및 TXT 파일로 저장
-        text_extraction_result = extract_text_from_html_file(html_file_name)
-        logger.info(f"텍스트 추출 및 저장 결과: {text_extraction_result}")
+        # 3. 텍스트 파일 포맷팅 및 저장
+        logger.info(f"Task {task_id}: 3단계: {text_file_basename} 포맷팅 시도")
+        formatted_text_file_basename = format_text_file(text_file_basename) # .func 제거
+        if not formatted_text_file_basename:
+            logger.error(f"Task {task_id}: 텍스트 포맷팅 실패 (format_text_file 반환값 없음)")
+            self.update_state(state='FAILURE', meta={'exc_type': 'RuntimeError', 'exc_message': 'Failed to format extracted text.'})
+            raise RuntimeError("Failed to format extracted text.")
+        logger.info(f"Task {task_id}: 텍스트 포맷팅 성공, 파일명: {formatted_text_file_basename}")
 
-        # 저장된 TXT 파일 이름 추출 (예: "logs/body_html_recursive_some_url.txt")
-        saved_txt_file_path = text_extraction_result.split("saved to ", 1)[1].strip()
-        txt_file_name = os.path.basename(saved_txt_file_path) # 파일 이름만 추출
-        logger.info(f"추출된 TXT 파일명: {txt_file_name}")
+        # 4. 포맷팅된 텍스트 파일 내용 읽기
+        logger.info(f"Task {task_id}: 4단계: 포맷팅된 텍스트 파일 ({formatted_text_file_basename}) 내용 읽기 시도")
+        job_posting_content = ""
+        # logs 디렉토리는 celery_tasks.py와 같은 레벨 또는 entrypoint.sh가 실행되는 /app 기준
+        formatted_text_file_path = os.path.join("logs", formatted_text_file_basename)
+        try:
+            with open(formatted_text_file_path, "r", encoding="utf-8") as f:
+                job_posting_content = f.read()
+            logger.info(f"Task {task_id}: 포맷팅된 텍스트 파일 읽기 성공. 내용 길이: {len(job_posting_content)}")
+        except FileNotFoundError:
+            logger.error(f"Task {task_id}: 포맷팅된 텍스트 파일을 찾을 수 없음: {formatted_text_file_path}", exc_info=True)
+            self.update_state(state='FAILURE', meta={'exc_type': 'FileNotFoundError', 'exc_message': f'Formatted text file not found: {formatted_text_file_basename}'})
+            raise
+        except Exception as e:
+            logger.error(f"Task {task_id}: 포맷팅된 텍스트 파일 읽기 중 오류: {e}", exc_info=True)
+            self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
+            raise
 
-        # 3. TXT 파일 포맷팅 (50자마다 줄바꿈) 및 원본 TXT 삭제
-        format_result = format_text_file(txt_file_name)
-        logger.info(f"텍스트 파일 포맷팅 결과: {format_result}")
-        
-        # 최종 결과 메시지 (user_story 관련 로직은 현재 없음)
-        final_message = f"Successfully processed {job_url}. HTML extracted, text extracted, and formatted. Formatted file info: {format_result}. UserStory was: '{user_story}'"
-        logger.info(final_message)
-        return final_message
-        
-    except FileNotFoundError as fnf_error:
-        logger.error(f"perform_processing 작업 중 파일 찾기 오류 발생: {fnf_error}", exc_info=True)
-        raise # Celery가 실패로 처리하도록 예외 다시 발생
+        if not user_story:
+            logger.warning(f"Task {task_id}: 사용자 스토리가 제공되지 않았습니다. 자기소개서 생성은 채용 공고 기반으로만 진행됩니다.")
+            # user_story가 None이거나 비어있을 경우, generate_cover_letter 함수가 이를 처리할 수 있도록 빈 문자열 전달
+            user_story_for_generation = ""
+        else:
+            user_story_for_generation = user_story
+
+        # 5. 자기소개서 생성
+        logger.info(f"Task {task_id}: 5단계: 자기소개서 생성 시도. User story (앞부분): {user_story_for_generation[:100]}... Job posting (앞부분): {job_posting_content[:100]}...")
+        raw_cover_letter, formatted_cover_letter = generate_cover_letter(
+            user_story=user_story_for_generation, 
+            job_posting_content=job_posting_content
+        )
+        logger.info(f"Task {task_id}: 자기소개서 생성 완료. 원본 길이: {len(raw_cover_letter)}, 포맷된 버전 길이: {len(formatted_cover_letter)}")
+
+        return {
+            "status": "SUCCESS",
+            "message": "Cover letter generated successfully.",
+            "job_url": job_url,
+            "html_file": html_file_basename,
+            "text_file": text_file_basename,
+            "formatted_text_file": formatted_text_file_basename,
+            "raw_cover_letter": raw_cover_letter,
+            "formatted_cover_letter": formatted_cover_letter,
+            "user_story_preview": user_story_for_generation[:200] + "..." if user_story_for_generation else "N/A"
+        }
+
     except Exception as e:
-        logger.error(f"perform_processing 작업 중 오류 발생 (URL: {job_url}, UserStory: {user_story}): {e}", exc_info=True)
-        raise # Celery가 태스크를 실패로 처리하도록 예외를 다시 발생시킴
+        logger.error(f"Task {task_id}: perform_processing 중 예외 발생: {e}", exc_info=True)
+        # Celery 작업 상태를 FAILURE로 업데이트하고, 예외 정보를 meta에 포함
+        self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
+        # 오류를 다시 발생시켜 Celery가 실패로 처리하도록 함
+        raise # raise e 보다 그냥 raise가 스택 트레이스를 보존하는 데 더 좋습니다.
 
 @celery_app.task(name='celery_tasks.extract_text_from_html_file')
 def extract_text_from_html_file(html_file_name: str):
     """
-    logs 디렉토리에 저장된 HTML 파일에서 순수 텍스트를 추출하여 .txt 파일로 저장합니다.
-    html_file_name: logs 디렉토리 내의 HTML 파일 이름 (예: 'body_html_recursive_some_url.html')
+    logs 디렉토리 내의 지정된 HTML 파일에서 텍스트를 추출하여 파일로 저장합니다.
+    저장 후, 생성된 텍스트 파일의 이름(logs 디렉토리 기준 상대 경로)을 반환합니다.
+    입력 html_file_name은 logs 디렉토리를 제외한 파일명이어야 합니다.
     """
-    logger.info(f"Attempting to extract text from HTML file: {html_file_name}")
+    logger.info(f"Attempting to extract text from HTML file: {html_file_name} (expected in logs/)")
+    
     logs_dir = "logs"
     html_file_path = os.path.join(logs_dir, html_file_name)
 
     if not os.path.exists(html_file_path):
-        error_msg = f"HTML file not found at path: {html_file_path}"
+        error_msg = f"HTML file not found in logs directory: {html_file_name} (Full path checked: {html_file_path})"
         logger.error(error_msg)
         raise FileNotFoundError(error_msg)
-
-    html_content = ""
+    
     try:
-        logger.debug(f"Reading HTML file: {html_file_path}")
-        with open(html_file_path, "r", encoding="utf-8") as f:
+        with open(html_file_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
-        logger.info(f"Successfully read HTML file: {html_file_path}. Content length: {len(html_content)}")
-        if not html_content.strip():
-            logger.warning(f"HTML file {html_file_path} is empty or contains only whitespace.")
-            # HTML 내용이 비었어도 빈 TXT 파일을 생성할 수 있도록 진행하거나, 여기서 에러 처리 가능
-            # 여기서는 빈 내용으로 진행
-    except FileNotFoundError: # 경로 존재 검사 후에도 열기 실패 시
-        error_msg = f"HTML file not found when trying to open: {html_file_path}"
-        logger.error(error_msg, exc_info=True)
-        raise
-    except IOError as e:
-        error_msg = f"IOError reading HTML file {html_file_path}: {e}"
-        logger.error(error_msg, exc_info=True)
-        raise
-    except Exception as e:
-        error_msg = f"Unexpected error reading HTML file {html_file_path}: {e}"
-        logger.error(error_msg, exc_info=True)
-        raise
-
-    soup = None
-    try:
-        logger.debug("Creating BeautifulSoup object from HTML content.")
-        soup = BeautifulSoup(html_content, 'html.parser')
-        logger.info("Successfully created BeautifulSoup object.")
-    except Exception as e:
-        error_msg = f"Error creating BeautifulSoup object from HTML file {html_file_path}: {e}"
-        logger.error(error_msg, exc_info=True)
-        # BeautifulSoup 객체 생성 실패 시 soup이 None일 수 있으므로, 이후 코드에서 None 체크 필요
-        # 또는 여기서 바로 raise 하여 작업 중단
-        raise
-
-    try:
-        if soup: # soup 객체가 정상적으로 생성된 경우에만 진행
-            logger.debug("Removing script and style tags from BeautifulSoup object.")
-            for script_or_style in soup(["script", "style"]):
-                script_or_style.decompose()
-                # logger.debug(f"Removed tag: <{script_or_style.name}>") # 너무 많은 로그를 생성할 수 있어 주석 처리
-            logger.info("Successfully removed script and style tags.")
-        else:
-            logger.warning("BeautifulSoup object is None, skipping script/style tag removal.")
-    except Exception as e:
-        error_msg = f"Error removing script/style tags from HTML file {html_file_path}: {e}"
-        logger.error(error_msg, exc_info=True)
-        # 이 단계에서 오류가 발생해도 텍스트 추출은 시도해볼 수 있음 (선택적)
-        # raise # 또는 여기서 에러를 발생시켜 중단
-
-    text_content = ""
-    try:
-        if soup: # soup 객체가 정상적으로 생성된 경우에만 진행
-            logger.debug("Extracting text content using get_text().")
-            text_content = soup.get_text(separator='\\n', strip=True)
-            logger.info(f"Successfully extracted text content. Text length: {len(text_content)}")
-            if not text_content.strip() and html_content.strip(): # HTML은 있는데 추출된 텍스트가 없다면 경고
-                 logger.warning(f"Extracted text content is empty or whitespace from non-empty HTML file {html_file_path}.")
-        elif not html_content.strip(): # HTML 내용 자체가 비어있었다면
-             logger.info(f"HTML content was empty for {html_file_path}, so extracted text is also empty.")
-        else: # soup 객체가 None인 경우 (위에서 생성 실패)
-            logger.error(f"Cannot extract text because BeautifulSoup object is None for {html_file_path}.")
-            # 이 경우, 빈 텍스트로 진행하거나 에러 발생
-            raise ValueError(f"BeautifulSoup object was not created for {html_file_path}")
-
-    except Exception as e:
-        error_msg = f"Error extracting text content from HTML file {html_file_path}: {e}"
-        logger.error(error_msg, exc_info=True)
-        raise
-
-    txt_file_path = ""
-    try:
-        base_name, _ = os.path.splitext(html_file_name)
-        txt_file_name = f"{base_name}.txt"
-        txt_file_path = os.path.join(logs_dir, txt_file_name)
-
-        logger.debug(f"Writing extracted text to: {txt_file_path}")
-        with open(txt_file_path, "w", encoding="utf-8") as f:
-            f.write(text_content)
-        logger.info(f"Successfully wrote extracted text to {txt_file_path}. Length: {len(text_content)}")
         
-        success_msg = f"Text content extracted from {html_file_name} and saved to {txt_file_path}"
-        logger.info(success_msg)
-        return success_msg
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # 스크립트, 스타일 태그 제거
+        for script_or_style in soup(["script", "style"]):
+            script_or_style.decompose()
+        
+        text_content = soup.get_text(separator='\n', strip=True)
+        text_content = re.sub(r'\n\s*\n', '\n', text_content) # 여러 빈 줄을 하나로
+        
+        if not text_content:
+            logger.warning(f"No text content extracted from {html_file_name}. The file might be empty or contain no text.")
 
-    except IOError as e:
-        error_msg = f"IOError writing extracted text to {txt_file_path} (from HTML file {html_file_path}): {e}"
-        logger.error(error_msg, exc_info=True)
+        # 원본 HTML 파일명에서 확장자 제거하고 _text.txt 추가
+        base_name_without_ext = os.path.splitext(html_file_name)[0]
+        # 출력 파일명 (logs 디렉토리 제외)
+        output_txt_basename = f"text_{base_name_without_ext}.txt" 
+        # 절대 경로
+        output_txt_path = os.path.join(logs_dir, output_txt_basename)
+        
+        with open(output_txt_path, 'w', encoding='utf-8') as f:
+            f.write(text_content)
+            
+        logger.info(f"Text content successfully extracted from '{html_file_name}' and saved to '{output_txt_basename}' in logs directory.")
+        return output_txt_basename # logs 디렉토리 기준 상대 경로 (파일명) 반환
+        
+    except FileNotFoundError: # 위에서 이미 체크했지만, 이중 방어
+        logger.error(f"Error: HTML file '{html_file_name}' not found at '{html_file_path}'.", exc_info=True) # 이미 위에서 명시적으로 발생시킴
         raise
     except Exception as e:
-        error_msg = f"Unexpected error writing extracted text to {txt_file_path} (from HTML file {html_file_path}): {e}"
-        logger.error(error_msg, exc_info=True)
+        logger.error(f"Error extracting text from HTML file '{html_file_name}': {e}", exc_info=True)
         raise
 
 @celery_app.task(name='celery_tasks.format_text_file')
@@ -504,7 +502,7 @@ def format_text_file(original_txt_file_name: str):
         except OSError as e:
             logger.warning(f"Could not delete original file {original_file_path}: {e}", exc_info=True)
         
-        return success_msg
+        return formatted_txt_file_name # 성공 메시지 대신 파일명 반환
 
     except FileNotFoundError: # 위에서 이미 처리했지만, 이중 확인
         raise

@@ -15,7 +15,7 @@ if [ "$1" = "web" ]; then
   # Gunicorn을 사용하는 경우 (더 많은 설정 옵션, 여러 워커 등)
   # exec gunicorn -w ${WEB_WORKERS:-1} -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:${PORT}
   # Uvicorn을 직접 사용하는 경우
-  exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --log-level info --reload
+  exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --log-level info
 elif [ "$1" = "worker" ]; then
   echo "Starting Celery worker..."
   # -A: Celery 애플리케이션 인스턴스 지정 (celery_app.py 안의 celery_app 객체)

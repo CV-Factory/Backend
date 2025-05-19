@@ -19,7 +19,8 @@ WORKDIR $APP_HOME
 # requirements.txt 복사 및 패키지 설치
 COPY requirements.txt .
 # pip 설치 시 로그를 상세히 남기기 위해 -v 옵션 추가 가능
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir uv
+RUN uv pip install --no-cache-dir --system -r requirements.txt
 
 # Playwright 브라우저 설치 (chromium만 설치하는 예시)
 # --with-deps 옵션으로 시스템 종속성도 함께 설치
