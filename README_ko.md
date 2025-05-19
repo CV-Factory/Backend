@@ -8,7 +8,9 @@
 
 ## 📖 개요
 
-이 저장소는 CVFactory 프로젝트의 백엔드 서버 코드를 포함하며, 주로 웹 페이지 및 기타 텍스트 소스에서 정보를 처리하고 추출하여 CV와 같은 콘텐츠를 생성하는 데 사용됩니다. API 요청을 처리하고, 웹 스크래핑(Playwright 사용), HTML 파싱(BeautifulSoup 사용), 텍스트 추출 및 형식화 작업을 수행하며, 이러한 작업들을 Redis와 함께 Celery를 사용하여 백그라운드 태스크로 관리합니다. 또한, **Langchain을 활용하여 검색 증강 생성(RAG) 방식으로 자기소개서를 생성하는 스크립트를 포함하며, 벡터 임베딩(FAISS)과 Cohere를 임베딩에 사용하고 Google Generative AI(Gemini)를 텍스트 생성에 활용합니다.**
+이 저장소는 CVFactory 프로젝트의 백엔드 서버 코드를 포함하며, 주로 웹 페이지 및 기타 텍스트 소스에서 정보를 처리하고 추출하여 CV와 같은 콘텐츠를 생성하는 데 사용됩니다.
+API 요청을 처리하고, 웹 스크래핑(Playwright 사용), HTML 파싱(BeautifulSoup 사용), 텍스트 추출 및 형식화 작업을 수행하며, 이러한 작업들을 Redis와 함께 Celery를 사용하여 백그라운드 태스크로 관리합니다.
+또한, Langchain을 활용하여 검색 증강 생성(RAG) 방식으로 자기소개서를 생성하는 스크립트를 포함하며, 벡터 임베딩(FAISS)과 Cohere를 임베딩에 사용하고 Google Generative AI(Gemini)를 텍스트 생성에 활용합니다.
 
 ## 🛠 기술 스택
 
@@ -23,7 +25,7 @@
 | 데이터 처리 | Pydantic (요청/응답 모델용) |
 | 로깅 | 표준 Python `logging` |
 | 컨테이너화 | Docker, Docker Compose |
-| **AI/ML & RAG** | **Langchain, Google Generative AI (Gemini), Cohere (임베딩용), FAISS (벡터 저장소)** |
+| AI/ML & RAG | Langchain, Google Generative AI (Gemini), Cohere (임베딩용), FAISS (벡터 저장소) |
 
 ## 🚀 시작하기
 
@@ -31,13 +33,13 @@
 
 - Docker
 - Docker Compose
-- **Conda (자기소개서 생성 스크립트 실행용)**
+- Conda (자기소개서 생성 스크립트 실행용)
 
 ### 설치 방법
 
 1. 저장소를 클론합니다.
 2. `CVFactory_Server` 디렉토리로 이동합니다.
-3. **(선택 사항) 자기소개서 생성 스크립트 실행을 위한 Conda 환경을 생성하고 활성화합니다:**
+3. (선택 사항) 자기소개서 생성 스크립트 실행을 위한 Conda 환경을 생성하고 활성화합니다:
 ```bash
 conda create -n cvfactory_env python=3.10 -y
 conda activate cvfactory_env
@@ -60,7 +62,7 @@ FastAPI 서버는 `docker-compose.yml` 파일에 매핑된 포트(`8001` 기본�
 
 Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩니다.
 
-**자기소개서 생성 스크립트 사용법:**
+자기소개서 생성 스크립트 사용법:
 
 설치 단계에서 생성한 Conda 환경을 사용하여 자기소개서 생성 스크립트를 실행하려면:
 
@@ -89,7 +91,7 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
 ├── logs/             # 애플리케이션 로그 및 생성된 파일을 위한 디렉토리 (볼륨으로 마운트됨)
 ├── LICENSE           # 라이선스 파일 (CC BY NC 4.0)
 ├── README.md         # 영어 README 파일
-└── **generate_cover_letter_semantic.py**: RAG 및 Gemini API를 활용한 자기소개서 생성 스크립트입니다.
+└── generate_cover_letter_semantic.py: RAG 및 Gemini API를 활용한 자기소개서 생성 스크립트입니다.
 ```
 
 ## 📄 라이선스

@@ -8,7 +8,9 @@
 
 ## 📖 Overview
 
-This repository contains the backend server for the CVFactory project, designed for processing and extracting information from web pages and other text sources, particularly for generating content like CVs. It handles API requests, performs web scraping (using Playwright), parses HTML (using BeautifulSoup), extracts and formats text, and manages these operations as background tasks using Celery with Redis. **It also includes a script for generating cover letters leveraging Retrieval-Augmented Generation (RAG) with Langchain, utilizing Vector Embeddings (FAISS) and Cohere for embeddings, and Google Generative AI (Gemini) for text generation.**
+This repository contains the backend server for the CVFactory project, designed for processing and extracting information from web pages and other text sources, particularly for generating content like CVs.
+It handles API requests, performs web scraping (using Playwright), parses HTML (using BeautifulSoup), extracts and formats text, and manages these operations as background tasks using Celery with Redis.
+It also includes a script for generating cover letters leveraging Retrieval-Augmented Generation (RAG) with Langchain, utilizing Vector Embeddings (FAISS) and Cohere for embeddings, and Google Generative AI (Gemini) for text generation.
 
 ## 🛠 Tech Stack
 
@@ -23,7 +25,7 @@ This repository contains the backend server for the CVFactory project, designed 
 | Data Handling | Pydantic (for request/response models) |
 | Logging | Standard Python `logging` |
 | Containerization | Docker, Docker Compose |
-| **AI/ML & RAG** | **Langchain, Google Generative AI (Gemini), Cohere (for Embeddings), FAISS (Vector Store)** |
+| AI/ML & RAG | Langchain, Google Generative AI (Gemini), Cohere (for Embeddings), FAISS (Vector Store) |
 
 ## 🚀 Getting Started
 
@@ -31,13 +33,13 @@ This repository contains the backend server for the CVFactory project, designed 
 
 - Docker
 - Docker Compose
-- **Conda (for running cover letter generation script)**
+- Conda (for running cover letter generation script)
 
 ### Installation
 
 1. Clone the repository.
 2. Navigate to the `CVFactory_Server` directory.
-3. **(Optional) Create and activate a Conda environment for the cover letter generation script:**
+3. (Optional) Create and activate a Conda environment for the cover letter generation script:
 ```bash
 conda create -n cvfactory_env python=3.10 -y
 conda activate cvfactory_env
@@ -58,7 +60,7 @@ This command builds the Docker image (installing Python dependencies and Playwri
 
 The FastAPI server will be accessible via the port mapped in the `docker-compose.yml` file (default: `8001`). You can interact with the defined API endpoints to initiate tasks. Tasks are processed asynchronously by the Celery worker.
 
-**Cover Letter Generation Script:**
+Cover Letter Generation Script:
 
 To run the cover letter generation script using the Conda environment created in the installation steps:
 
@@ -97,7 +99,7 @@ Logs and extracted files will be saved to the `logs/` directory, which is mapped
 ├── logs/             # Directory for application logs and generated files (mounted as a volume)
 ├── LICENSE           # License file (CC BY NC 4.0)
 ├── README_ko.md      # Korean README file
-├── **generate_cover_letter_semantic.py # Script for generating cover letters using RAG and Gemini API**
+├── generate_cover_letter_semantic.py # Script for generating cover letters using RAG and Gemini API
 ```
 
 ## 📄 License
