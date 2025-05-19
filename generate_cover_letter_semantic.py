@@ -30,9 +30,15 @@ def format_text_by_length(text, length=50):
         logger.error(f"텍스트 포맷팅 중 오류 발생: {e}", exc_info=True)
         return text
 
-def generate_cover_letter(user_story: str, job_posting_content: str):
+def generate_cover_letter(job_posting_content: str, user_story: str | None = None):
     logger.debug("자기소개서 생성 함수 시작...")
-    logger.debug(f"입력된 사용자 스토리 (일부): {user_story[:100]}...")
+    
+    if not user_story or not user_story.strip():
+        logger.info("사용자 스토리가 제공되지 않았거나 비어있습니다. 기본 프롬프트를 사용합니다.")
+        user_story = "저는 귀사에 기여하고 함께 성장하고 싶은 지원자입니다. 저의 잠재력과 열정을 바탕으로 뛰어난 성과를 만들겠습니다." # 기본 사용자 스토리
+    else:
+        logger.debug(f"입력된 사용자 스토리 (일부): {user_story[:100]}...")
+
     logger.debug(f"입력된 채용 공고 내용 (일부): {job_posting_content[:200]}...")
 
     if not job_posting_content or not job_posting_content.strip():
@@ -103,14 +109,11 @@ def generate_cover_letter(user_story: str, job_posting_content: str):
         raise
 
     # 자기소개서 생성 요청 프롬프트
-    query = f"""다음은 저의 이야기입니다:
-{user_story}
-
-이 이야기를 바탕으로, (RAG 시스템에 의해 컨텍스트로 제공될) 채용 공고에 가장 적합한 자기소개서를 작성해주세요. 
+    query = f"""채용 공고에 가장 적합한 자기소개서를 작성해주세요. 
 자기소개서는 한국어로 작성해주시고, 다음 사항들을 고려해주세요:
-- 저의 강점과 경험이 채용 공고의 어떤 필요 역량 및 직무 내용과 연결되는지 명확히 설명해주세요.
-- 이 회사와 제시된 포지션에 제가 왜 깊은 관심을 가지게 되었는지 구체적인 이유를 포함해주세요.
-- 저의 핵심 역량과 경험을 통해 회사에 어떻게 기여할 수 있을지 보여주세요.
+- (만약 사용자 스토리가 제공되었다면) 다음은 저의 이야기입니다: [{user_story}] 이 이야기를 바탕으로, 저의 강점과 경험이 채용 공고의 어떤 필요 역량 및 직무 내용과 연결되는지 명확히 설명해주세요.
+- (사용자 스토리가 없다면) 일반적인 지원자로서, 이 회사와 제시된 포지션에 제가 왜 깊은 관심을 가지게 되었는지 구체적인 이유를 포함해주세요.
+- 저의 핵심 역량과 경험을 통해 회사에 어떻게 기여할 수 있을지 보여주세요. (채용 공고 내용을 주로 참고)
 """
     logger.debug(f"자기소개서 생성 요청 프롬프트 (일부): {query[:200]}...")
 
@@ -153,25 +156,71 @@ if __name__ == "__main__":
     logger.info("generate_cover_letter_semantic.py 스크립트 직접 실행 (테스트용)")
 
     try:
-        raw_cv, formatted_cv = generate_cover_letter(user_story=test_user_story, job_posting_content=test_job_content)
+        # 테스트 시나리오 1: user_story 제공
+        logger.info("테스트 시나리오 1: 사용자 스토리 제공")
+        raw_cv_with_story, formatted_cv_with_story = generate_cover_letter(job_posting_content=test_job_content, user_story=test_user_story)
         
-        if raw_cv:
-            print("\n--- 자기소개서 원본 ---")
-            print(raw_cv)
-            print("\n--- 40자 개행 자기소개서 ---")
-            print(formatted_cv)
+        if raw_cv_with_story:
+            print("\n--- 자기소개서 원본 (사용자 스토리 제공) ---")
+            print(raw_cv_with_story)
+            # print("\n--- 40자 개행 자기소개서 (사용자 스토리 제공) ---") # 로컬 테스트 시에만 출력
+            # print(formatted_cv_with_story)
 
-            output_path = "logs/generated_cover_letter_formatted_test.txt"
-            logger.debug(f"테스트 자기소개서 저장 경로: {output_path}")
+            output_path_with_story = "logs/generated_cover_letter_with_story_test.txt"
+            logger.debug(f"테스트 자기소개서 (사용자 스토리 제공) 저장 경로: {output_path_with_story}")
             try:
-                with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(formatted_cv)
-                logger.info(f"테스트 자기소개서가 성공적으로 저장되었습니다: {output_path}")
+                with open(output_path_with_story, "w", encoding="utf-8") as f:
+                    f.write(formatted_cv_with_story) # 포맷팅된 버전 저장
+                logger.info(f"테스트 자기소개서 (사용자 스토리 제공)가 성공적으로 저장되었습니다: {output_path_with_story}")
             except Exception as e:
-                logger.error(f"테스트 자기소개서 파일 저장 중 오류 발생: {e}", exc_info=True)
+                logger.error(f"테스트 자기소개서 (사용자 스토리 제공) 파일 저장 중 오류 발생: {e}", exc_info=True)
         else:
-            logger.warning(f"테스트 자기소개서 생성 실패: {formatted_cv}") 
-            print(f"테스트 자기소개서 생성에 실패했습니다. 메시지: {formatted_cv}")
+            logger.warning(f"테스트 자기소개서 (사용자 스토리 제공) 생성 실패: {formatted_cv_with_story}") 
+            print(f"테스트 자기소개서 (사용자 스토리 제공) 생성에 실패했습니다. 메시지: {formatted_cv_with_story}")
+
+        # 테스트 시나리오 2: user_story 미제공 (None)
+        logger.info("테스트 시나리오 2: 사용자 스토리 미제공 (None)")
+        raw_cv_no_story, formatted_cv_no_story = generate_cover_letter(job_posting_content=test_job_content, user_story=None)
+
+        if raw_cv_no_story:
+            print("\n--- 자기소개서 원본 (사용자 스토리 미제공) ---")
+            print(raw_cv_no_story)
+            # print("\n--- 40자 개행 자기소개서 (사용자 스토리 미제공) ---")
+            # print(formatted_cv_no_story)
+
+            output_path_no_story = "logs/generated_cover_letter_no_story_test.txt"
+            logger.debug(f"테스트 자기소개서 (사용자 스토리 미제공) 저장 경로: {output_path_no_story}")
+            try:
+                with open(output_path_no_story, "w", encoding="utf-8") as f:
+                    f.write(formatted_cv_no_story) # 포맷팅된 버전 저장
+                logger.info(f"테스트 자기소개서 (사용자 스토리 미제공)가 성공적으로 저장되었습니다: {output_path_no_story}")
+            except Exception as e:
+                logger.error(f"테스트 자기소개서 (사용자 스토리 미제공) 파일 저장 중 오류 발생: {e}", exc_info=True)
+        else:
+            logger.warning(f"테스트 자기소개서 (사용자 스토리 미제공) 생성 실패: {formatted_cv_no_story}")
+            print(f"테스트 자기소개서 (사용자 스토리 미제공) 생성에 실패했습니다. 메시지: {formatted_cv_no_story}")
+            
+        # 테스트 시나리오 3: user_story 빈 문자열
+        logger.info("테스트 시나리오 3: 사용자 스토리 빈 문자열")
+        raw_cv_empty_story, formatted_cv_empty_story = generate_cover_letter(job_posting_content=test_job_content, user_story="")
+
+        if raw_cv_empty_story:
+            print("\n--- 자기소개서 원본 (사용자 스토리 빈 문자열) ---")
+            print(raw_cv_empty_story)
+            # print("\n--- 40자 개행 자기소개서 (사용자 스토리 빈 문자열) ---")
+            # print(formatted_cv_empty_story)
+
+            output_path_empty_story = "logs/generated_cover_letter_empty_story_test.txt"
+            logger.debug(f"테스트 자기소개서 (사용자 스토리 빈 문자열) 저장 경로: {output_path_empty_story}")
+            try:
+                with open(output_path_empty_story, "w", encoding="utf-8") as f:
+                    f.write(formatted_cv_empty_story) # 포맷팅된 버전 저장
+                logger.info(f"테스트 자기소개서 (사용자 스토리 빈 문자열)가 성공적으로 저장되었습니다: {output_path_empty_story}")
+            except Exception as e:
+                logger.error(f"테스트 자기소개서 (사용자 스토리 빈 문자열) 파일 저장 중 오류 발생: {e}", exc_info=True)
+        else:
+            logger.warning(f"테스트 자기소개서 (사용자 스토리 빈 문자열) 생성 실패: {formatted_cv_empty_story}")
+            print(f"테스트 자기소개서 (사용자 스토리 빈 문자열) 생성에 실패했습니다. 메시지: {formatted_cv_empty_story}")
 
     except FileNotFoundError as e:
         logger.error(f"테스트 중 파일 오류: {e}", exc_info=True)
