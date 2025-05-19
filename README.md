@@ -15,12 +15,20 @@ Core functionalities are managed as asynchronous background tasks.
 
 ## ✨ Core Technologies
 
-The server employs several key technologies and methodologies:
+The server employs several key technologies and methodologies, which can be grouped as follows:
+
+### Data Extraction and Preprocessing
 
 - **Web Scraping/Crawling**: Utilizes Playwright to dynamically fetch and render web pages. This enables the extraction of content even from JavaScript-heavy sites. It can recursively navigate through iframes to gather comprehensive HTML data (e.g., `extract_body_html_recursive` task in `celery_tasks.py`).
 - **HTML Parsing**: Employs BeautifulSoup to parse the fetched HTML. This allows for targeted extraction of text and structured data from the raw HTML content.
 - **Text Processing**: Includes functionalities for cleaning and formatting extracted text (e.g., `format_text_file` in `celery_tasks.py`). This prepares the data for further use, such as input for LLMs or storage.
+
+### Asynchronous Task Orchestration
+
 - **Background Task Management**: Leverages Celery with Redis as a message broker. This system manages potentially long-running operations (scraping, parsing, formatting, LLM calls) asynchronously, ensuring the API remains responsive and can handle multiple requests efficiently.
+
+### Generative AI and Advanced Text Processing
+
 - **Large Language Model (LLM) Integration**: Incorporates Google's Gemini API (via `ChatGoogleGenerativeAI` from `langchain_google_genai`) to generate application-specific text, such as cover letters. The `generate_cover_letter_semantic.py` script showcases how the LLM is prompted with contextually relevant information to produce desired outputs.
 - **Retrieval-Augmented Generation (RAG)**: Implements a RAG pipeline using Langchain to enhance the LLM's context understanding for tasks like cover letter generation. This process, detailed in `generate_cover_letter_semantic.py`, involves:
     - Loading source documents (e.g., job posting text from the `logs/` directory).
