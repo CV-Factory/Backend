@@ -27,7 +27,7 @@ elif [ "$1" = "worker" ]; then
   # WORKER_CONCURRENCY 환경 변수가 설정되어 있지 않으면 기본값 1 사용
   CONCURRENCY=${WORKER_CONCURRENCY:-1}
   echo "Celery worker concurrency: $CONCURRENCY"
-  exec celery -A $APP_MODULE worker -l debug --concurrency=$CONCURRENCY
+  exec celery -A $APP_MODULE worker -l info --concurrency=$CONCURRENCY
 elif [ "$1" = "beat" ]; then
   echo "Starting Celery beat scheduler..."
   # 정기적인 작업 스케줄링이 필요할 경우 Celery Beat 실행

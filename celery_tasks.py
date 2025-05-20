@@ -8,8 +8,34 @@ from urllib.parse import urljoin, urlparse
 import hashlib
 import time
 from generate_cover_letter_semantic import generate_cover_letter
+import uuid
+from celery.exceptions import MaxRetriesExceededError
+from dotenv import load_dotenv
+import google.generativeai as genai
+
+# 전역 로깅 레벨 및 라이브러리 로깅 레벨 조정
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("cohere").setLevel(logging.WARNING)
+logging.getLogger("google.generativeai").setLevel(logging.INFO) # Gemini API 자체 로그는 INFO 유지
 
 logger = logging.getLogger(__name__)
+
+# Celery 작업이 시작될 때 .env 파일 로드
+# load_dotenv()를 호출하면 현재 작업 디렉토리 또는 상위 디렉토리에서 .env 파일을 찾아 환경 변수를 로드합니다.
+# Docker 환경에서는 컨테이너 내에 .env 파일이 존재하고, Celery 워커가 실행되는 컨텍스트에서 접근 가능해야 합니다.
+# 또는 Docker Compose 등을 통해 환경 변수로 직접 주입하는 것이 더 일반적입니다.
+# 여기서는 .env 파일이 Celery 워커의 CWD에 있다고 가정합니다.
+try:
+    if load_dotenv():
+        logger.info(".env file loaded successfully by dotenv.")
+    else:
+        # .env 파일이 없을 수도 있으므로 경고만 로깅하고 진행합니다.
+        # API 키는 os.getenv를 통해 직접 환경 변수로 설정되었을 수도 있습니다.
+        logger.warning(".env file not found or empty. Trusting environment variables for API keys.")
+except Exception as e_dotenv:
+    logger.error(f"Error loading .env file: {e_dotenv}", exc_info=True)
 
 # 상수 정의
 MAX_IFRAME_DEPTH = 3  # iframe 최대 재귀 깊이
@@ -300,97 +326,140 @@ def open_url_with_playwright_inspector(url: str):
         logger.error(f"An unexpected error occurred in open_url_with_playwright_inspector for URL '{url}': {e}", exc_info=True)
         raise
 
-@celery_app.task(name='celery_tasks.perform_processing', bind=True)
-def perform_processing(self, job_url: str, user_story: str | None = None):
+@celery_app.task(bind=True, name='celery_tasks.perform_processing', max_retries=3, default_retry_delay=60)
+def perform_processing(self, job_url: str, user_story: str, job_site_name: str = "unknown_site"):
     task_id = self.request.id
-    logger.info(f"Task {task_id}: perform_processing 시작, job_url: {job_url}")
+    logger.info(f"Task {task_id} (UUID: {uuid.uuid4()}): perform_processing 시작, job_url: {job_url}, job_site_name: {job_site_name}")
 
     if not job_url:
         logger.error(f"Task {task_id}: job_url이 제공되지 않았습니다.")
         self.update_state(state='FAILURE', meta={'exc_type': 'ValueError', 'exc_message': 'job_url is required'})
-        raise ValueError("job_url is required")
+        raise ValueError("job_url is required") # Celery는 이 예외를 잡고 작업을 실패로 표시
 
-    logger.info(f"Task {task_id}: 사용자 스토리 (앞부분): {user_story[:100] if user_story else 'N/A'}...")
+    # user_story가 None일 경우를 대비한 처리
+    user_story_for_generation = user_story if user_story is not None else ""
+    if not user_story:
+        logger.warning(f"Task {task_id}: 사용자 스토리가 제공되지 않았습니다. 자기소개서 생성은 채용 공고 기반으로만 진행될 수 있습니다.")
+    else:
+        logger.info(f"Task {task_id}: 사용자 스토리 (앞부분): {user_story_for_generation[:100]}...")
+    
+    html_file_name = None
+    raw_text_file_name = None
+    llm_filtered_file_name = None
+    rag_ready_file_name = None
+    logs_dir = "logs" # 일관성을 위해 여기서도 정의
 
     try:
-        # 1. URL에서 HTML 스크래핑 및 저장
-        logger.info(f"Task {task_id}: 1단계: {job_url} 에서 HTML 추출 시도")
-        html_file_basename = extract_body_html_from_url(job_url) # .func 제거
-        if not html_file_basename:
+        # 1단계: URL에서 HTML 스크래핑 및 저장
+        logger.info(f"Task {task_id}: 1단계: {job_url} 에서 HTML 추출 시도 (job_site_name: {job_site_name})")
+        html_file_name = extract_body_html_from_url(url=job_url) 
+        if not html_file_name:
             logger.error(f"Task {task_id}: HTML 추출 실패 (extract_body_html_from_url 반환값 없음)")
-            self.update_state(state='FAILURE', meta={'exc_type': 'RuntimeError', 'exc_message': 'Failed to extract HTML content.'})
-            raise RuntimeError("Failed to extract HTML content.")
-        logger.info(f"Task {task_id}: HTML 추출 성공, 파일명: {html_file_basename}")
+            # update_state는 여기서 할 필요 없음. 예외 발생 시 Celery가 처리.
+            raise RuntimeError("Failed to extract HTML content from URL.")
+        logger.info(f"Task {task_id}: HTML 추출 성공, 파일명: {html_file_name}")
 
-        # 2. HTML 파일에서 텍스트 추출 및 저장
-        logger.info(f"Task {task_id}: 2단계: {html_file_basename} 에서 텍스트 추출 시도")
-        text_file_basename = extract_text_from_html_file(html_file_basename) # .func 제거
-        if not text_file_basename:
-            logger.error(f"Task {task_id}: 텍스트 추출 실패 (extract_text_from_html_file 반환값 없음)")
-            self.update_state(state='FAILURE', meta={'exc_type': 'RuntimeError', 'exc_message': 'Failed to extract text from HTML.'})
-            raise RuntimeError("Failed to extract text from HTML.")
-        logger.info(f"Task {task_id}: 텍스트 추출 성공, 파일명: {text_file_basename}")
+        # 2단계: 저장된 HTML 파일에서 전체 텍스트 추출 (한 줄로)
+        logger.info(f"Task {task_id}: 2단계: {html_file_name} 에서 전체 텍스트 추출 시도")
+        raw_text_file_name = extract_text_from_html_file(html_file_name)
+        if not raw_text_file_name:
+             logger.error(f"Task {task_id}: 텍스트 추출 실패 (extract_text_from_html_file 반환값 없음)")
+             raise RuntimeError("Failed to extract text from HTML file.")
+        logger.info(f"Task {task_id}: 전체 텍스트 추출 성공, 파일명: {raw_text_file_name}")
 
-        # 3. 텍스트 파일 포맷팅 및 저장
-        logger.info(f"Task {task_id}: 3단계: {text_file_basename} 포맷팅 시도")
-        formatted_text_file_basename = format_text_file(text_file_basename) # .func 제거
-        if not formatted_text_file_basename:
-            logger.error(f"Task {task_id}: 텍스트 포맷팅 실패 (format_text_file 반환값 없음)")
-            self.update_state(state='FAILURE', meta={'exc_type': 'RuntimeError', 'exc_message': 'Failed to format extracted text.'})
-            raise RuntimeError("Failed to format extracted text.")
-        logger.info(f"Task {task_id}: 텍스트 포맷팅 성공, 파일명: {formatted_text_file_basename}")
+        # 3단계: 추출된 전체 텍스트를 LLM으로 필터링
+        logger.info(f"Task {task_id}: 3단계: {raw_text_file_name} LLM 필터링 시도")
+        llm_filtered_file_name = filter_job_posting_with_llm(raw_text_file_name)
+        if not llm_filtered_file_name:
+            logger.error(f"Task {task_id}: LLM 필터링 실패 (filter_job_posting_with_llm 반환값 없음)")
+            raise RuntimeError("Failed to filter text using LLM.")
+        logger.info(f"Task {task_id}: LLM 필터링 성공, 파일명: {llm_filtered_file_name}")
 
-        # 4. 포맷팅된 텍스트 파일 내용 읽기
-        logger.info(f"Task {task_id}: 4단계: 포맷팅된 텍스트 파일 ({formatted_text_file_basename}) 내용 읽기 시도")
-        job_posting_content = ""
-        # logs 디렉토리는 celery_tasks.py와 같은 레벨 또는 entrypoint.sh가 실행되는 /app 기준
-        formatted_text_file_path = os.path.join("logs", formatted_text_file_basename)
-        try:
-            with open(formatted_text_file_path, "r", encoding="utf-8") as f:
-                job_posting_content = f.read()
-            logger.info(f"Task {task_id}: 포맷팅된 텍스트 파일 읽기 성공. 내용 길이: {len(job_posting_content)}")
-        except FileNotFoundError:
-            logger.error(f"Task {task_id}: 포맷팅된 텍스트 파일을 찾을 수 없음: {formatted_text_file_path}", exc_info=True)
-            self.update_state(state='FAILURE', meta={'exc_type': 'FileNotFoundError', 'exc_message': f'Formatted text file not found: {formatted_text_file_basename}'})
-            raise
-        except Exception as e:
-            logger.error(f"Task {task_id}: 포맷팅된 텍스트 파일 읽기 중 오류: {e}", exc_info=True)
-            self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
-            raise
+        # 4단계: LLM 필터링된 텍스트 포맷팅 (50자 줄바꿈, RAG용 파일명)
+        logger.info(f"Task {task_id}: 4단계: {llm_filtered_file_name} 포맷팅 (RAG용) 시도")
+        rag_ready_file_name = format_text_file(llm_filtered_file_name)
+        if not rag_ready_file_name:
+            logger.error(f"Task {task_id}: RAG용 텍스트 포맷팅 실패 (format_text_file 반환값 없음)")
+            raise RuntimeError("Failed to format LLM-filtered text for RAG.")
+        logger.info(f"Task {task_id}: RAG용 최종 텍스트 포맷팅 성공, 파일명: {rag_ready_file_name}")
 
-        if not user_story:
-            logger.warning(f"Task {task_id}: 사용자 스토리가 제공되지 않았습니다. 자기소개서 생성은 채용 공고 기반으로만 진행됩니다.")
-            # user_story가 None이거나 비어있을 경우, generate_cover_letter 함수가 이를 처리할 수 있도록 빈 문자열 전달
-            user_story_for_generation = ""
-        else:
-            user_story_for_generation = user_story
+        # 5단계: RAG용 최종 텍스트 파일 내용 읽기
+        logger.info(f"Task {task_id}: 5단계: RAG용 최종 텍스트 파일 ({rag_ready_file_name}) 내용 읽기 시도")
+        rag_ready_file_path = os.path.join(logs_dir, rag_ready_file_name)
+        
+        job_posting_content_for_rag = ""
+        if not os.path.exists(rag_ready_file_path):
+            error_msg = f"Task {task_id}: RAG용 최종 포맷팅된 파일 ({rag_ready_file_path})을 찾을 수 없습니다."
+            logger.error(error_msg)
+            raise FileNotFoundError(error_msg) # FileNotFoundError는 명시적으로 발생
 
-        # 5. 자기소개서 생성
-        logger.info(f"Task {task_id}: 5단계: 자기소개서 생성 시도. User story (앞부분): {user_story_for_generation[:100]}... Job posting (앞부분): {job_posting_content[:100]}...")
+        with open(rag_ready_file_path, 'r', encoding='utf-8') as f:
+            job_posting_content_for_rag = f.read()
+        logger.info(f"Task {task_id}: RAG용 최종 텍스트 파일 읽기 성공. 내용 길이: {len(job_posting_content_for_rag)}")
+        logger.debug(f"Task {task_id}: RAG에 사용될 최종 콘텐츠 (처음 200자): {job_posting_content_for_rag[:200]}")
+
+        # 6단계: 커버 레터 생성 (RAG)
+        logger.info(f"Task {task_id}: 6단계: 자기소개서 생성 시도. User story (앞부분): {user_story_for_generation[:100]}... Job posting (앞부분): {job_posting_content_for_rag[:100]}...")
+        # generate_cover_letter_semantic.py의 generate_cover_letter 함수가 (raw, formatted) 튜플을 반환한다고 가정
         raw_cover_letter, formatted_cover_letter = generate_cover_letter(
-            user_story=user_story_for_generation, 
-            job_posting_content=job_posting_content
+            job_posting_content=job_posting_content_for_rag, 
+            user_story=user_story_for_generation 
         )
         logger.info(f"Task {task_id}: 자기소개서 생성 완료. 원본 길이: {len(raw_cover_letter)}, 포맷된 버전 길이: {len(formatted_cover_letter)}")
+        
+        # 임시 파일들 삭제 (선택 사항, 최종 RAG 파일은 남겨둠)
+        files_to_delete_intermediate = [html_file_name, raw_text_file_name, llm_filtered_file_name] 
+        for f_name in files_to_delete_intermediate:
+            try:
+                if f_name: 
+                    f_path = os.path.join(logs_dir, f_name)
+                    if os.path.exists(f_path):
+                        os.remove(f_path)
+                        logger.info(f"Task {task_id}: 중간 파일 삭제 성공: {f_path}")
+            except Exception as e_del: # 변수명 변경
+                logger.warning(f"Task {task_id}: 중간 파일 삭제 중 오류 ({f_name}): {e_del}")
+
 
         return {
-            "status": "SUCCESS",
+            "status": "SUCCESS", # Celery 표준은 SUCCESS/FAILURE
             "message": "Cover letter generated successfully.",
             "job_url": job_url,
-            "html_file": html_file_basename,
-            "text_file": text_file_basename,
-            "formatted_text_file": formatted_text_file_basename,
+            "rag_file_used": rag_ready_file_name,
             "raw_cover_letter": raw_cover_letter,
             "formatted_cover_letter": formatted_cover_letter,
             "user_story_preview": user_story_for_generation[:200] + "..." if user_story_for_generation else "N/A"
         }
 
-    except Exception as e:
-        logger.error(f"Task {task_id}: perform_processing 중 예외 발생: {e}", exc_info=True)
-        # Celery 작업 상태를 FAILURE로 업데이트하고, 예외 정보를 meta에 포함
-        self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
-        # 오류를 다시 발생시켜 Celery가 실패로 처리하도록 함
-        raise # raise e 보다 그냥 raise가 스택 트레이스를 보존하는 데 더 좋습니다.
+    except FileNotFoundError as e_fnf: # 변수명 변경
+        logger.error(f"Task {task_id}: perform_processing 중 FileNotFoundError 발생: {e_fnf}", exc_info=True)
+        self.update_state(state='FAILURE', meta={'exc_type': 'FileNotFoundError', 'exc_message': str(e_fnf)})
+        raise 
+    except ValueError as e_val: # 변수명 변경
+        logger.error(f"Task {task_id}: perform_processing 중 ValueError 발생: {e_val}", exc_info=True)
+        self.update_state(state='FAILURE', meta={'exc_type': 'ValueError', 'exc_message': str(e_val)})
+        raise
+    except RuntimeError as e_rt: # 변수명 변경
+        logger.error(f"Task {task_id}: perform_processing 중 RuntimeError 발생: {e_rt}", exc_info=True)
+        self.update_state(state='FAILURE', meta={'exc_type': 'RuntimeError', 'exc_message': str(e_rt)})
+        raise
+    except MaxRetriesExceededError as e_mre: # 변수명 변경
+        logger.error(f"Task {task_id}: Max retries exceeded for perform_processing: {e_mre}", exc_info=True)
+        # update_state는 Celery가 자동으로 처리할 수 있으므로, 여기서는 재발생만으로 충분할 수 있음.
+        # 단, 추가 정보를 meta에 담고 싶다면 여기서 update_state를 호출.
+        self.update_state(state='FAILURE', meta={'exc_type': 'MaxRetriesExceededError', 'exc_message': f"Max retries exceeded: {str(e_mre)}"})
+        raise # 최종 실패를 알림
+    except Exception as e_gen: # 변수명 변경, 가장 마지막에 위치
+        logger.error(f"Task {task_id}: perform_processing 중 예측하지 못한 예외 발생: {e_gen}", exc_info=True)
+        try:
+            self.retry(exc=e_gen) # Celery의 내장 재시도 메커니즘 사용
+        except MaxRetriesExceededError as e_retry_max: # retry 호출 후 MaxRetriesExceededError
+            logger.error(f"Task {task_id}: Retry Succeeded by MaxRetriesExceededError for perform_processing: {e_retry_max}", exc_info=True)
+            self.update_state(state='FAILURE', meta={'exc_type': 'MaxRetriesExceededError', 'exc_message': f"Max retries exceeded after explicit retry: {str(e_retry_max)}"})
+            raise # 최종 실패를 알림
+        except Exception as e_retry_other: # retry 중 다른 예외 (거의 발생 안 함)
+             logger.error(f"Task {task_id}: Unexpected error during retry attempt for perform_processing: {e_retry_other}", exc_info=True)
+             self.update_state(state='FAILURE', meta={'exc_type': type(e_retry_other).__name__, 'exc_message': f"Unexpected error during retry: {str(e_retry_other)}"})
+             raise
 
 @celery_app.task(name='celery_tasks.extract_text_from_html_file')
 def extract_text_from_html_file(html_file_name: str):
@@ -410,118 +479,224 @@ def extract_text_from_html_file(html_file_name: str):
         logger.error(error_msg)
         raise FileNotFoundError(error_msg)
     
+    extracted_text_file_name = "" # 초기화
+
     try:
         with open(html_file_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
         
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # 스크립트, 스타일 태그 제거
+        # 모든 스크립트와 스타일 태그 제거
         for script_or_style in soup(["script", "style"]):
             script_or_style.decompose()
-        
-        # 텍스트를 공백으로 구분하여 가져오고, strip=True로 각 요소의 앞뒤 공백 제거
-        text_content_from_soup = soup.get_text(separator=' ', strip=True)
-        # 위에서 얻은 텍스트에서 연속된 공백 (줄바꿈 포함)을 단일 공백으로 변경하고, 전체 문자열의 앞뒤 공백 제거
-        final_text_content = re.sub(r'\s+', ' ', text_content_from_soup).strip()
-        
-        if not final_text_content:
-            logger.warning(f"No text content extracted from {html_file_name} after processing. The file might be empty or contain no text.")
-        else:
-            logger.debug(f"Extracted single-line text (first 300 chars): {final_text_content[:300]}")
-            logger.debug(f"Extracted single-line text (last 300 chars): {final_text_content[-300:]}")
+            logger.debug(f"Removed tag: {script_or_style.name}")
 
-        # 원본 HTML 파일명에서 확장자 제거하고 _text.txt 추가
-        base_name_without_ext = os.path.splitext(html_file_name)[0]
-        # 출력 파일명 (logs 디렉토리 제외)
-        output_txt_basename = f"text_{base_name_without_ext}.txt" 
-        # 절대 경로
-        output_txt_path = os.path.join(logs_dir, output_txt_basename)
+        # 텍스트 추출, 여러 공백을 단일 공백으로 대체, 줄바꿈은 공백으로 처리
+        text = soup.get_text(separator=' ', strip=True)
+        text = ' '.join(text.split()) # 연속된 공백들을 하나로 합침
         
-        with open(output_txt_path, 'w', encoding='utf-8') as f:
-            f.write(final_text_content)
-            
-        logger.info(f"Single-line text content successfully extracted from '{html_file_name}' and saved to '{output_txt_basename}' in logs directory.")
-        return output_txt_basename # logs 디렉토리 기준 상대 경로 (파일명) 반환
+        logger.debug(f"Extracted text (first 200 chars): {text[:200]}")
+
+        # 원본 HTML 파일 이름에서 확장자를 변경하고 접두사를 추가하여 새 텍스트 파일 이름 생성
+        # 예: body_html_example.html -> text_content_from_html_example.txt
+        base_name = html_file_name.replace("body_html_", "").replace(".html", "")
+        extracted_text_file_name = f"text_content_from_html_{base_name}.txt"
+        extracted_text_file_path = os.path.join(logs_dir, extracted_text_file_name)
         
-    except FileNotFoundError: # 위에서 이미 체크했지만, 이중 방어
-        logger.error(f"Error: HTML file '{html_file_name}' not found at '{html_file_path}'.", exc_info=True) # 이미 위에서 명시적으로 발생시킴
+        with open(extracted_text_file_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        
+        logger.info(f"Text content successfully extracted from '{html_file_name}' and saved to '{extracted_text_file_name}' in logs directory.")
+        logger.debug(f"Full path of extracted text file: {extracted_text_file_path}")
+        
+        return extracted_text_file_name
+
+    except FileNotFoundError: # 이미 위에서 체크했지만, 만약을 위해
         raise
     except Exception as e:
-        logger.error(f"Error extracting single-line text from HTML file '{html_file_name}': {e}", exc_info=True)
-        raise
+        error_msg = f"Failed to extract text from HTML file {html_file_name}: {e}"
+        logger.error(error_msg, exc_info=True)
+        # 실패 시 빈 파일명을 반환하거나, 혹은 None을 반환하도록 처리 가능
+        if extracted_text_file_name and os.path.exists(os.path.join(logs_dir, extracted_text_file_name)):
+             logger.debug(f"Attempting to remove partially created file: {extracted_text_file_name}")
+             os.remove(os.path.join(logs_dir, extracted_text_file_name))
+        raise # 예외를 다시 발생시켜 Celery가 실패 처리하도록 함
 
-@celery_app.task(name='celery_tasks.format_text_file')
-def format_text_file(original_txt_file_name: str):
+@celery_app.task(name='celery_tasks.filter_job_posting_with_llm')
+def filter_job_posting_with_llm(raw_text_file_name: str):
     """
-    logs 디렉토리에 있는 .txt 파일의 내용을 읽어 50자마다 줄바꿈을 추가하고,
-    _formatted.txt 접미사를 붙여 새로운 파일로 저장합니다.
-    original_txt_file_name: logs 디렉토리 내의 원본 .txt 파일 이름 (한 줄로 된 텍스트를 포함할 것으로 예상)
+    logs 디렉토리에 있는 원본 텍스트 파일(_raw.txt)을 읽어,
+    LLM(예: Gemini API)을 사용하여 채용 공고와 관련된 내용만 필터링하고,
+    결과를 _llm_filtered.txt 접미사를 붙여 새로운 파일로 저장합니다.
+    raw_text_file_name: logs 디렉토리 내의 원본 .txt 파일 이름 (예: text_content_from_html_... .txt)
     """
-    logger.info(f"Attempting to format text file (simple 50-char split): {original_txt_file_name}")
+    logger.info(f"Attempting to filter job posting content using LLM for file: {raw_text_file_name}")
     logs_dir = "logs"
-    original_file_path = os.path.join(logs_dir, original_txt_file_name)
+    raw_text_file_path = os.path.join(logs_dir, raw_text_file_name)
 
-    if not os.path.exists(original_file_path):
-        error_msg = f"Original text file not found: {original_file_path}"
+    if not os.path.exists(raw_text_file_path):
+        error_msg = f"Raw text file not found for LLM filtering: {raw_text_file_path}"
         logger.error(error_msg)
         raise FileNotFoundError(error_msg)
 
+    llm_filtered_file_name = ""
+    filtered_text_content = ""
+
     try:
-        logger.debug(f"Reading original text file (expected to be single line): {original_file_path}")
-        with open(original_file_path, "r", encoding="utf-8") as f:
-            original_text_content = f.read()
-        logger.info(f"Successfully read original text file: {original_file_path}. Content length: {len(original_text_content)}")
+        with open(raw_text_file_path, "r", encoding="utf-8") as f:
+            raw_text_content = f.read()
+        logger.debug(f"Successfully read raw text file: {raw_text_file_path}. Content length: {len(raw_text_content)}")
         
-        # 혹시 모를 줄바꿈과 연속 공백을 최종 정리 (이전 단계에서 처리되었을 것으로 예상되나 안전장치)
-        single_long_line = re.sub(r'\s+', ' ', original_text_content).strip()
-        if not single_long_line: # 비어있는 경우
-             logger.info("Original text content is empty after stripping whitespace, formatted file will be empty.")
-             formatted_text_content = ""
+        if not raw_text_content.strip():
+            logger.warning(f"Raw text content for {raw_text_file_name} is empty or whitespace. Skipping LLM filtering.")
+            filtered_text_content = "원본 내용 없음 (LLM 필터링 건너뜀)"
         else:
-            logger.debug(f"Content to be split (first 200 chars): '{single_long_line[:200]}...'")
-            formatted_lines = []
-            current_pos = 0
-            while current_pos < len(single_long_line):
-                segment = single_long_line[current_pos:current_pos+50]
-                formatted_lines.append(segment)
-                # logger.debug(f"  Added segment: '{segment}'") # 필요시 상세 로깅
-                current_pos += 50
-            formatted_text_content = "\n".join(formatted_lines)
+            logger.debug(f"Raw text (first 200 chars for LLM): {raw_text_content[:200]}")
+
+            gemini_api_key = os.getenv("GEMINI_API_KEY")
+            if not gemini_api_key:
+                logger.error("GEMINI_API_KEY not found in environment variables. LLM filtering cannot proceed.")
+                # 또는, API 키가 없으면 원본을 그대로 반환하거나, 특정 오류 메시지를 담은 내용을 반환할 수 있습니다.
+                # 여기서는 오류를 발생시켜 작업이 실패하도록 합니다.
+                raise ValueError("GEMINI_API_KEY is not set. Cannot use LLM filtering.")
+            
+            try:
+                genai.configure(api_key=gemini_api_key)
+                # 모델 설정 (텍스트 생성에 적합한 모델 선택)
+                # 사용 가능한 모델 목록은 `genai.list_models()`로 확인 가능
+                model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17') # 모델명 변경
+                
+                prompt = f"""다음 텍스트에서 실제 채용 공고 내용과 직접적으로 관련된 부분만 추출해주세요. (예: 회사 소개, 자격 요건, 담당 업무, 우대 사항, 복지 및 혜택, 전형 절차 등). 웹사이트 메뉴, 푸터, 광고, 관련 없는 뉴스, 저작권 정보 등 채용 조건과 직접적인 관련이 없는 내용은 제외해주세요. 응답은 추출된 텍스트만 포함해야 합니다. 추가적인 설명이나 머리말, 꼬리말 없이 내용만 주세요.:\n\n---
+{raw_text_content}
+---"""
+                
+                logger.info(f"Sending request to Gemini API for file {raw_text_file_name}. Prompt length: {len(prompt)}")
+                # generation_config = genai.types.GenerationConfig(
+                #     candidate_count=1,
+                #     # stop_sequences=['...'], # 필요시 중단 시퀀스
+                #     # max_output_tokens=2048, # 필요시 최대 토큰 수 제한
+                #     temperature=0.7, # 창의성 조절 (0.0 ~ 1.0)
+                # )
+                # response = model.generate_content(prompt, generation_config=generation_config)
+                response = model.generate_content(prompt)
+                
+                # 응답에서 텍스트 추출
+                if response.parts:
+                    filtered_text_content = "".join(part.text for part in response.parts if hasattr(part, 'text'))
+                elif hasattr(response, 'text') and response.text: # 구버전 SDK 호환성 또는 단순 응답
+                    filtered_text_content = response.text
+                else: # 응답에 텍스트가 없는 경우
+                    logger.warning(f"Gemini API response for {raw_text_file_name} did not contain text in parts or direct text attribute. Response: {response}")
+                    filtered_text_content = "LLM 응답에 텍스트 내용 없음"
+                
+                # 안전 등급 확인 (선택 사항)
+                if response.prompt_feedback and response.prompt_feedback.block_reason:
+                    logger.warning(f"Prompt for {raw_text_file_name} was blocked by Gemini API. Reason: {response.prompt_feedback.block_reason}")
+                    # 이 경우, filtered_text_content는 비어있거나 기본 메시지일 수 있음
+                if response.candidates and response.candidates[0].finish_reason != 'STOP':
+                     logger.warning(f"Gemini API generation for {raw_text_file_name} did not finish normally. Finish reason: {response.candidates[0].finish_reason}")
+
+                logger.info(f"Successfully received response from Gemini API for {raw_text_file_name}. Filtered content length: {len(filtered_text_content)}")
+
+            except Exception as e_gemini:
+                logger.error(f"Error during Gemini API call for {raw_text_file_name}: {e_gemini}", exc_info=True)
+                # Gemini API 호출 실패 시, 원본 내용을 사용하거나 오류 메시지를 담을 수 있음
+                # 여기서는 원본 내용을 사용하고 경고 로깅
+                logger.warning(f"LLM filtering failed for {raw_text_file_name} due to API error. Using raw text as fallback.")
+                filtered_text_content = raw_text_content # Fallback to raw content
+
+        if not filtered_text_content or filtered_text_content.isspace():
+            logger.warning(f"LLM filtering resulted in empty or whitespace content for {raw_text_file_name} (after potential API call). Using a placeholder.")
+            filtered_text_content = "LLM 필터링 결과 내용이 비어있거나 공백임"
+
+        logger.debug(f"LLM filtered text (first 200 chars): {filtered_text_content[:200]}")
         
-        logger.info(f"Successfully formatted text content (simple 50-char split). New length: {len(formatted_text_content)}")
-        if formatted_text_content: # 내용이 있을 때만 앞/뒤 일부 로깅
-            logger.debug(f"Formatted content (first 200 chars): {formatted_text_content[:200]}")
-            logger.debug(f"Formatted content (last 200 chars): {formatted_text_content[-200:]}")
+        base_name = raw_text_file_name.replace("text_content_from_html_", "").replace(".txt", "")
+        llm_filtered_file_name = f"llm_filtered_job_posting_{base_name}.txt"
+        llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_file_name)
 
-        base_name, ext = os.path.splitext(original_txt_file_name)
-        # 이름 충돌을 피하기 위해 _formatted_simple.txt 와 같이 변경할 수도 있으나, 일단 유지
-        formatted_txt_file_name = f"{base_name}_formatted.txt" 
-        formatted_file_path = os.path.join(logs_dir, formatted_txt_file_name)
-
-        logger.debug(f"Writing formatted text to: {formatted_file_path}")
-        with open(formatted_file_path, "w", encoding="utf-8") as f:
-            f.write(formatted_text_content)
+        with open(llm_filtered_file_path, "w", encoding="utf-8") as f:
+            f.write(filtered_text_content)
         
-        success_msg = f"Text content from {original_txt_file_name} was formatted (simple 50-char split) and saved to {formatted_file_path}"
-        logger.info(success_msg)
-
-        # 원본 파일 삭제 로직 (필요시 유지)
-        try:
-            os.remove(original_file_path)
-            logger.info(f"Successfully deleted original file: {original_file_path}")
-        except OSError as e:
-            logger.warning(f"Could not delete original file {original_file_path}: {e}", exc_info=True)
+        logger.info(f"Successfully filtered text using LLM and saved to '{llm_filtered_file_name}'.")
         
-        return formatted_txt_file_name
+        return llm_filtered_file_name
 
-    except FileNotFoundError: # 위에서 이미 처리했지만, 이중 확인
+    except FileNotFoundError:
         raise
-    except IOError as e:
-        error_msg = f"IOError during simple text formatting for {original_txt_file_name}: {e}"
-        logger.error(error_msg, exc_info=True)
+    except ValueError as ve: # API 키 관련 오류
+        logger.error(f"ValueError in LLM filtering for {raw_text_file_name}: {ve}", exc_info=True)
         raise
     except Exception as e:
-        error_msg = f"An unexpected error occurred during simple text formatting for {original_txt_file_name}: {e}"
+        error_msg = f"Failed to filter text with LLM for file {raw_text_file_name}: {e}"
         logger.error(error_msg, exc_info=True)
+        # 실패 시 부분적으로 생성된 파일이 있다면 삭제 시도
+        if llm_filtered_file_name and os.path.exists(os.path.join(logs_dir, llm_filtered_file_name)):
+             logger.debug(f"Attempting to remove partially created LLM filtered file: {llm_filtered_file_name}")
+             try:
+                 os.remove(os.path.join(logs_dir, llm_filtered_file_name))
+             except Exception as e_del_llm:
+                 logger.error(f"Error removing partially created LLM file {llm_filtered_file_name}: {e_del_llm}")
+        raise
+
+@celery_app.task(name='celery_tasks.format_text_file')
+def format_text_file(llm_filtered_txt_file_name: str):
+    """
+    logs 디렉토리에 있는 LLM 필터링된 .txt 파일(_llm_filtered.txt)의 내용을 읽어
+    50자마다 줄바꿈을 추가하고, rag_..._formatted.txt 접미사를 붙여 새로운 파일로 저장합니다.
+    llm_filtered_txt_file_name: logs 디렉토리 내의 LLM 필터링된 .txt 파일 이름
+                                (예: llm_filtered_job_posting_... .txt)
+    """
+    logger.info(f"Attempting to format LLM-filtered text file for RAG (simple 50-char split): {llm_filtered_txt_file_name}")
+    logs_dir = "logs"
+    llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_txt_file_name)
+
+    if not os.path.exists(llm_filtered_file_path):
+        error_msg = f"LLM-filtered text file not found for formatting: {llm_filtered_file_path}"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
+
+    rag_formatted_text_file_name = ""
+
+    try:
+        logger.debug(f"Reading LLM-filtered text file: {llm_filtered_file_path}")
+        with open(llm_filtered_file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        logger.info(f"Successfully read LLM-filtered text file: {llm_filtered_file_path}. Content length: {len(content)}")
+        logger.debug(f"LLM-filtered content (first 200 chars before formatting): {content[:200]}")
+
+        # 50자 단위로 줄바꿈 추가
+        formatted_lines = []
+        # 만약 content가 매우 길 경우, 이 방식은 메모리 비효율적일 수 있음. 스트리밍 방식 고려 가능.
+        for i in range(0, len(content), 50):
+            formatted_lines.append(content[i:i+50])
+        
+        formatted_content = "\n".join(formatted_lines)
+
+        logger.info(f"Successfully formatted text content for RAG (simple 50-char split). New length: {len(formatted_content)}")
+        logger.debug(f"Formatted content for RAG (first 3 lines): {formatted_lines[:3]}")
+        logger.debug(f"Formatted content for RAG (last 3 lines): {formatted_lines[-3:] if len(formatted_lines) > 3 else formatted_lines}")
+
+        # 파일 이름 생성: llm_filtered_job_posting_... .txt -> rag_job_posting_..._formatted.txt
+        base_name = llm_filtered_txt_file_name.replace("llm_filtered_job_posting_", "rag_job_posting_").replace(".txt", "")
+        rag_formatted_text_file_name = f"{base_name}_formatted.txt" # 최종 RAG에 사용될 파일명
+        rag_formatted_text_file_path = os.path.join(logs_dir, rag_formatted_text_file_name)
+        
+        logger.debug(f"Writing formatted text for RAG to: {rag_formatted_text_file_path}")
+        with open(rag_formatted_text_file_path, "w", encoding="utf-8") as f:
+            f.write(formatted_content)
+        
+        logger.info(f"Text content from {llm_filtered_txt_file_name} was formatted for RAG and saved to {rag_formatted_text_file_path}")
+
+        return rag_formatted_text_file_name
+    except FileNotFoundError:
+        raise
+    except Exception as e:
+        error_msg = f"Failed to format LLM-filtered text file {llm_filtered_txt_file_name} for RAG: {e}"
+        logger.error(error_msg, exc_info=True)
+        if rag_formatted_text_file_name and os.path.exists(os.path.join(logs_dir, rag_formatted_text_file_name)):
+            logger.debug(f"Attempting to remove partially created RAG formatted file: {rag_formatted_text_file_name}")
+            os.remove(os.path.join(logs_dir, rag_formatted_text_file_name))
         raise 
