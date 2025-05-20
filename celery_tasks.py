@@ -473,7 +473,7 @@ def extract_text_from_html_file(html_file_name: str):
     """
     logger.info(f"Attempting to extract text from HTML file as a single line: {html_file_name} (expected in logs/)")
     
-    logs_dir = "logs"
+    logs_dir = "logs" # CWD 기준 logs 디렉토리 사용으로 통일
     html_file_path = os.path.join(logs_dir, html_file_name)
 
     if not os.path.exists(html_file_path):
@@ -484,57 +484,90 @@ def extract_text_from_html_file(html_file_name: str):
     extracted_text_file_name = "" # 초기화
     
     try:
-        with open(html_file_path, 'r', encoding='utf-8') as f:
+        logger.info(f"Reading HTML file: {html_file_path}")
+        with open(html_file_path, "r", encoding="utf-8") as f:
             html_content = f.read()
-        
-        soup = BeautifulSoup(html_content, 'html.parser')
-        
-        # 모든 스크립트와 스타일 태그 제거
+        logger.info(f"Successfully read HTML file: {html_file_path}")
+    except FileNotFoundError:
+        logger.error(f"HTML file not found: {html_file_path}")
+        return None
+    except Exception as e:
+        logger.error(f"Error reading HTML file {html_file_path}: {e}")
+        return None
+
+    try:
+        soup = BeautifulSoup(html_content, "html.parser")
+        # 스크립트 및 스타일 태그 제거 (원본 로직 유지 또는 필요시 get_text() 옵션으로 대체 가능)
         for script_or_style in soup(["script", "style"]):
             script_or_style.decompose()
             logger.debug(f"Removed tag: {script_or_style.name}")
-
-        # 텍스트 추출, 여러 공백을 단일 공백으로 대체, 줄바꿈은 공백으로 처리
-        text = soup.get_text(separator=' ', strip=True)
-        text = ' '.join(text.split()) # 연속된 공백들을 하나로 합침
         
-        logger.debug(f"Extracted text (first 200 chars): {text[:200]}")
-
-        # 원본 HTML 파일 이름에서 확장자를 변경하고 접두사를 추가하여 새 텍스트 파일 이름 생성
-        # 예: body_html_example.html -> text_content_from_html_example.txt
-        base_name = html_file_name.replace("body_html_", "").replace(".html", "")
-        extracted_text_file_name = f"text_content_from_html_{base_name}.txt"
-        extracted_text_file_path = os.path.join(logs_dir, extracted_text_file_name)
-        
-        with open(extracted_text_file_path, 'w', encoding='utf-8') as f:
-            f.write(text)
-        
-        logger.info(f"Text content successfully extracted from '{html_file_name}' and saved to '{extracted_text_file_name}' in logs directory.")
-        logger.debug(f"Full path of extracted text file: {extracted_text_file_path}")
-        
-        return extracted_text_file_name
-
-    except FileNotFoundError: # 이미 위에서 체크했지만, 만약을 위해
-        raise
+        text = soup.get_text(separator=' ', strip=True) # separator와 strip 옵션 원복
+        text = ' '.join(text.split()) # 연속 공백 정리
+        logger.info(f"Successfully extracted text from HTML. Text length: {len(text)}")
     except Exception as e:
-        error_msg = f"Failed to extract text from HTML file {html_file_name}: {e}"
-        logger.error(error_msg, exc_info=True)
-        # 실패 시 빈 파일명을 반환하거나, 혹은 None을 반환하도록 처리 가능
-        if extracted_text_file_name and os.path.exists(os.path.join(logs_dir, extracted_text_file_name)):
-             logger.debug(f"Attempting to remove partially created file: {extracted_text_file_name}")
-             os.remove(os.path.join(logs_dir, extracted_text_file_name))
-        raise # 예외를 다시 발생시켜 Celery가 실패 처리하도록 함
+        logger.error(f"Error parsing HTML or extracting text with BeautifulSoup from {html_file_path}: {e}")
+        return None
+
+    # 원본 HTML 파일 이름에서 확장자를 변경하고 접두사를 추가하여 새 텍스트 파일 이름 생성
+    # 예: 20231027_1a2b3c4d.html -> text_content_from_html_20231027_1a2b3c4d.txt
+    # 또는 body_html_recursive_jobkorea.co.kr_... .html -> text_content_from_html_recursive_jobkorea.co.kr_... .txt
+    base_name_from_html_file = os.path.basename(html_file_path)
+    if base_name_from_html_file.startswith("body_html_recursive_"):
+        # 이전 파일명 형식 ("body_html_recursive_...") 처리
+        base_name = base_name_from_html_file.replace("body_html_recursive_", "").replace(".html", "")
+        output_filename_leaf = f"text_content_from_html_recursive_{base_name}.txt"
+    elif "_" in base_name_from_html_file and base_name_from_html_file.count("_") == 1 and base_name_from_html_file.endswith(".html"):
+        # 새로운 파일명 형식 ("날짜_고유번호.html") 처리
+        base_name = base_name_from_html_file.replace(".html", "")
+        output_filename_leaf = f"text_content_from_html_{base_name}.txt"
+    else:
+        # 예상치 못한 파일명 형식일 경우 기본값 또는 오류 처리
+        logger.warning(f"Unexpected html_file_path format: {html_file_path}. Using a default output name.")
+        output_filename_leaf = f"text_content_from_html_{uuid.uuid4().hex[:8]}.txt"
+
+
+    # logs_dir = os.path.join(os.path.dirname(__file__), '..', 'logs') # 이 부분은 이미 위에서 logs_dir = "logs"로 정의
+    os.makedirs(logs_dir, exist_ok=True) # os.makedirs는 이미 있는 디렉토리에 대해 오류를 발생시키지 않음
+    output_filename_path = os.path.join(logs_dir, output_filename_leaf)
+    
+    formatted_lines = []
+    try:
+        for i in range(0, len(text), 50):
+            formatted_lines.append(text[i:i+50])
+        text_to_write = "\n".join(formatted_lines)
+        logger.info(f"Formatted text with newlines. Preview of text_to_write:\n{text_to_write[:200]}")
+
+        # 파일에 쓰기 직전 터미널에 내용 출력
+        print(f"--- Content to be written to {output_filename_path} ---")
+        print(text_to_write)
+        print(f"--- Raw text preview (before join): {formatted_lines[:5]} ---")
+        print("--- End of content ---")
+
+    except Exception as e:
+        logger.error(f"Error formatting text for {output_filename_path}: {e}")
+        text_to_write = text
+
+    try:
+        with open(output_filename_path, "w", encoding="utf-8") as f:
+            f.write(text_to_write)
+        logger.info(f"Text content saved to {output_filename_path}")
+        return output_filename_leaf # 전체 경로 대신 파일명만 반환
+    except Exception as e:
+        logger.error(f"Error writing text content to {output_filename_path}: {e}")
+        return None
 
 @celery_app.task(name='celery_tasks.filter_job_posting_with_llm')
-def filter_job_posting_with_llm(raw_text_file_name: str):
+def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name은 이제 순수 파일명
     """
-    logs 디렉토리에 있는 원본 텍스트 파일(_raw.txt)을 읽어,
+    logs 디렉토리에 있는 원본 텍스트 파일(raw_text_file_name)을 읽어,
     LLM(예: Gemini API)을 사용하여 채용 공고와 관련된 내용만 필터링하고,
     결과를 _llm_filtered.txt 접미사를 붙여 새로운 파일로 저장합니다.
     raw_text_file_name: logs 디렉토리 내의 원본 .txt 파일 이름 (예: text_content_from_html_... .txt)
     """
     logger.info(f"Attempting to filter job posting content using LLM for file: {raw_text_file_name}")
-    logs_dir = "logs"
+    logs_dir = "logs" # 현재 파일 위치 기준 상대 경로
+    # raw_text_file_name이 이제 순수 파일명이므로, logs_dir와 결합하여 전체 경로 생성
     raw_text_file_path = os.path.join(logs_dir, raw_text_file_name)
 
     if not os.path.exists(raw_text_file_path):
@@ -614,8 +647,17 @@ def filter_job_posting_with_llm(raw_text_file_name: str):
 
         logger.debug(f"LLM filtered text (first 200 chars): {filtered_text_content[:200]}")
         
-        base_name = raw_text_file_name.replace("text_content_from_html_", "").replace(".txt", "")
-        llm_filtered_file_name = f"llm_filtered_job_posting_{base_name}.txt"
+        # raw_text_file_name은 순수 파일명이므로, 경로 제거 로직 불필요
+        # base_name = raw_text_file_name.replace("text_content_from_html_", "").replace(".txt", "") 
+        # 위 로직 대신 파일명에서 확장자만 제거하여 base_name 구성
+        base_name_without_ext = os.path.splitext(raw_text_file_name)[0]
+        # "text_content_from_html_" 프리픽스가 있다면 제거, 없다면 그대로 사용
+        if base_name_without_ext.startswith("text_content_from_html_"):
+            cleaned_base_name = base_name_without_ext.replace("text_content_from_html_", "")
+        else:
+            cleaned_base_name = base_name_without_ext # 예: 날짜_고유번호 형식 그대로 사용
+            
+        llm_filtered_file_name = f"llm_filtered_job_posting_{cleaned_base_name}.txt"
         llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_file_name)
 
         with open(llm_filtered_file_path, "w", encoding="utf-8") as f:
@@ -643,15 +685,16 @@ def filter_job_posting_with_llm(raw_text_file_name: str):
         raise
 
 @celery_app.task(name='celery_tasks.format_text_file')
-def format_text_file(llm_filtered_txt_file_name: str):
+def format_text_file(llm_filtered_txt_file_name: str): # llm_filtered_txt_file_name은 순수 파일명
     """
-    logs 디렉토리에 있는 LLM 필터링된 .txt 파일(_llm_filtered.txt)의 내용을 읽어
+    logs 디렉토리에 있는 LLM 필터링된 .txt 파일(llm_filtered_txt_file_name)의 내용을 읽어
     50자마다 줄바꿈을 추가하고, rag_..._formatted.txt 접미사를 붙여 새로운 파일로 저장합니다.
     llm_filtered_txt_file_name: logs 디렉토리 내의 LLM 필터링된 .txt 파일 이름
                                 (예: llm_filtered_job_posting_... .txt)
     """
     logger.info(f"Attempting to format LLM-filtered text file for RAG (simple 50-char split): {llm_filtered_txt_file_name}")
-    logs_dir = "logs"
+    logs_dir = "logs" # 현재 파일 위치 기준 상대 경로
+    # llm_filtered_txt_file_name이 순수 파일명이므로, logs_dir와 결합하여 전체 경로 생성
     llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_txt_file_name)
 
     if not os.path.exists(llm_filtered_file_path):
@@ -682,7 +725,16 @@ def format_text_file(llm_filtered_txt_file_name: str):
         logger.debug(f"Formatted content for RAG (last 3 lines): {formatted_lines[-3:] if len(formatted_lines) > 3 else formatted_lines}")
 
         # 파일 이름 생성: llm_filtered_job_posting_... .txt -> rag_job_posting_..._formatted.txt
-        base_name = llm_filtered_txt_file_name.replace("llm_filtered_job_posting_", "rag_job_posting_").replace(".txt", "")
+        # llm_filtered_txt_file_name은 순수 파일명
+        base_name_without_ext = os.path.splitext(llm_filtered_txt_file_name)[0]
+        # "llm_filtered_job_posting_" 프리픽스가 있다면 "rag_job_posting_"으로 교체
+        if base_name_without_ext.startswith("llm_filtered_job_posting_"):
+            base_name = base_name_without_ext.replace("llm_filtered_job_posting_", "rag_job_posting_")
+        else:
+            # 예상치 못한 형식이지만, 일단 "rag_" 프리픽스 추가
+            logger.warning(f"Unexpected format for llm_filtered_txt_file_name: {llm_filtered_txt_file_name}. Prepending 'rag_'.")
+            base_name = f"rag_{base_name_without_ext}"
+            
         rag_formatted_text_file_name = f"{base_name}_formatted.txt" # 최종 RAG에 사용될 파일명
         rag_formatted_text_file_path = os.path.join(logs_dir, rag_formatted_text_file_name)
         
