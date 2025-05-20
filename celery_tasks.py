@@ -377,13 +377,13 @@ def perform_processing(self, job_url: str, user_story: str, job_site_name: str =
             raise RuntimeError("Failed to filter text using LLM.")
         logger.info(f"Task {task_id}: LLM 필터링 성공, 파일명: {llm_filtered_file_name}")
 
-        # 4단계: LLM 필터링된 텍스트 포맷팅 (50자 줄바꿈, RAG용 파일명)
-        logger.info(f"Task {task_id}: 4단계: {llm_filtered_file_name} 포맷팅 (RAG용) 시도")
-        rag_ready_file_name = format_text_file(llm_filtered_file_name)
-        if not rag_ready_file_name:
-            logger.error(f"Task {task_id}: RAG용 텍스트 포맷팅 실패 (format_text_file 반환값 없음)")
-            raise RuntimeError("Failed to format LLM-filtered text for RAG.")
-        logger.info(f"Task {task_id}: RAG용 최종 텍스트 포맷팅 성공, 파일명: {rag_ready_file_name}")
+        # 4단계: LLM 필터링된 텍스트를 RAG용으로 직접 사용 (format_text_file 단계 제거)
+        logger.info(f"Task {task_id}: 4단계: {llm_filtered_file_name}을 RAG용 최종 텍스트로 사용")
+        rag_ready_file_name = llm_filtered_file_name # format_text_file 호출 제거하고 직접 할당
+        if not rag_ready_file_name: # llm_filtered_file_name이 없을 경우를 대비
+            logger.error(f"Task {task_id}: LLM 필터링된 파일명이 없습니다. RAG 처리를 진행할 수 없습니다.")
+            raise RuntimeError("LLM filtered file name is missing.")
+        logger.info(f"Task {task_id}: RAG용 최종 텍스트 파일명 설정 완료: {rag_ready_file_name}")
 
         # 5단계: RAG용 최종 텍스트 파일 내용 읽기
         logger.info(f"Task {task_id}: 5단계: RAG용 최종 텍스트 파일 ({rag_ready_file_name}) 내용 읽기 시도")
@@ -587,59 +587,66 @@ def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name�
             logger.warning(f"Raw text content for {raw_text_file_name} is empty or whitespace. Skipping LLM filtering.")
             filtered_text_content = "원본 내용 없음 (LLM 필터링 건너뜀)"
         else:
-            logger.debug(f"Raw text (first 200 chars for LLM): {raw_text_content[:200]}")
+            # API 전송 전 줄바꿈 문자를 공백으로 치환하는 로직을 제거하고 원본 텍스트를 그대로 사용합니다.
+            text_for_llm = raw_text_content
+            logger.debug(f"Raw text (first 200 chars for LLM, newlines preserved): {text_for_llm[:200]}")
 
             gemini_api_key = os.getenv("GEMINI_API_KEY")
             if not gemini_api_key:
-                logger.error("GEMINI_API_KEY not found in environment variables. LLM filtering cannot proceed.")
-                # 또는, API 키가 없으면 원본을 그대로 반환하거나, 특정 오류 메시지를 담은 내용을 반환할 수 있습니다.
-                # 여기서는 오류를 발생시켜 작업이 실패하도록 합니다.
-                raise ValueError("GEMINI_API_KEY is not set. Cannot use LLM filtering.")
+                logger.error("GEMINI_API_KEY not found in environment variables.")
+                raise ValueError("GEMINI_API_KEY is not set.")
+
+            genai.configure(api_key=gemini_api_key)
             
+            generation_config_gemini = genai.types.GenerationConfig(
+                temperature=0.2,
+                top_p=0.8,
+                top_k=20,
+                max_output_tokens=8192,
+            )
+
             try:
-                genai.configure(api_key=gemini_api_key)
-                # 모델 설정 (텍스트 생성에 적합한 모델 선택)
-                # 사용 가능한 모델 목록은 `genai.list_models()`로 확인 가능
-                model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17') # 모델명 변경
+                logger.info("Attempting to call Gemini API for text filtering...")
+                # 모델명을 'gemini-2.5-flash-preview-04-17'로 설정하고 try 블록 내부로 이동
+                model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
                 
-                prompt = f"""다음 텍스트에서 실제 채용 공고 내용과 직접적으로 관련된 부분만 추출해주세요. (예: 회사 소개, 자격 요건, 담당 업무, 우대 사항, 복지 및 혜택, 전형 절차 등). 웹사이트 메뉴, 푸터, 광고, 관련 없는 뉴스, 저작권 정보 등 채용 조건과 직접적인 관련이 없는 내용은 제외해주세요. 응답은 추출된 텍스트만 포함해야 합니다. 추가적인 설명이나 머리말, 꼬리말 없이 내용만 주세요.:\n\n---
-{raw_text_content}
----"""
+                # 프롬프트 문자열 따옴표 수정: f"""...""" 형태를 유지
+                prompt = f"""다음 텍스트에서 실제 채용 공고 내용과 직접적으로 관련된 부분만 추출해주세요. (예: 회사 소개, 자격 요건, 담당 업무, 우대 사항, 복지 및 혜택, 전형 절차 등). 웹사이트 메뉴, 푸터, 관련 없는 뉴스, 광고, 개인정보처리방침, 이용약관 등의 내용은 제외해주세요.
+
+추출할 내용이 없다면 '추출할 내용 없음'이라고 답변해주세요.
+
+---
+[원본 텍스트 시작]
+{text_for_llm}
+[원본 텍스트 끝]
+---
+
+추출된 내용:
+"""
                 
-                logger.info(f"Sending request to Gemini API for file {raw_text_file_name}. Prompt length: {len(prompt)}")
-                # generation_config = genai.types.GenerationConfig(
-                #     candidate_count=1,
-                #     # stop_sequences=['...'], # 필요시 중단 시퀀스
-                #     # max_output_tokens=2048, # 필요시 최대 토큰 수 제한
-                #     temperature=0.7, # 창의성 조절 (0.0 ~ 1.0)
-                # )
-                # response = model.generate_content(prompt, generation_config=generation_config)
-                response = model.generate_content(prompt)
+                response = model.generate_content(
+                    prompt,
+                    generation_config=generation_config_gemini,
+                )
                 
-                # 응답에서 텍스트 추출
                 if response.parts:
-                    filtered_text_content = "".join(part.text for part in response.parts if hasattr(part, 'text'))
-                elif hasattr(response, 'text') and response.text: # 구버전 SDK 호환성 또는 단순 응답
                     filtered_text_content = response.text
-                else: # 응답에 텍스트가 없는 경우
-                    logger.warning(f"Gemini API response for {raw_text_file_name} did not contain text in parts or direct text attribute. Response: {response}")
-                    filtered_text_content = "LLM 응답에 텍스트 내용 없음"
-                
-                # 안전 등급 확인 (선택 사항)
-                if response.prompt_feedback and response.prompt_feedback.block_reason:
-                    logger.warning(f"Prompt for {raw_text_file_name} was blocked by Gemini API. Reason: {response.prompt_feedback.block_reason}")
-                    # 이 경우, filtered_text_content는 비어있거나 기본 메시지일 수 있음
-                if response.candidates and response.candidates[0].finish_reason != 'STOP':
-                     logger.warning(f"Gemini API generation for {raw_text_file_name} did not finish normally. Finish reason: {response.candidates[0].finish_reason}")
+                    logger.info(f"Successfully filtered text using Gemini API. Filtered text length: {len(filtered_text_content)}")
+                    if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
+                        logger.warning("LLM returned empty or 'no content' response.")
+                        filtered_text_content = "LLM 필터링 결과 내용 없음"
+                else:
+                    logger.warning("Gemini API response did not contain any parts (candidates).")
+                    if response.prompt_feedback:
+                        logger.warning(f"Prompt feedback from API: {response.prompt_feedback}")
+                    filtered_text_content = "LLM 응답 없음 (API 반환 내용 없음)"
 
-                logger.info(f"Successfully received response from Gemini API for {raw_text_file_name}. Filtered content length: {len(filtered_text_content)}")
-
-            except Exception as e_gemini:
-                logger.error(f"Error during Gemini API call for {raw_text_file_name}: {e_gemini}", exc_info=True)
-                # Gemini API 호출 실패 시, 원본 내용을 사용하거나 오류 메시지를 담을 수 있음
-                # 여기서는 원본 내용을 사용하고 경고 로깅
-                logger.warning(f"LLM filtering failed for {raw_text_file_name} due to API error. Using raw text as fallback.")
-                filtered_text_content = raw_text_content # Fallback to raw content
+            except google.api_core.exceptions.InvalidArgument as e:
+                logger.error(f"Gemini API InvalidArgument error: {e}", exc_info=True)
+                filtered_text_content = f"LLM API 요청 오류 (InvalidArgument): {str(e)}"
+            except Exception as e:
+                logger.error(f"Error during Gemini API call: {e}", exc_info=True)
+                filtered_text_content = f"LLM API 호출 중 알 수 없는 오류: {str(e)}"
 
         if not filtered_text_content or filtered_text_content.isspace():
             logger.warning(f"LLM filtering resulted in empty or whitespace content for {raw_text_file_name} (after potential API call). Using a placeholder.")
@@ -682,75 +689,4 @@ def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name�
                  os.remove(os.path.join(logs_dir, llm_filtered_file_name))
              except Exception as e_del_llm:
                  logger.error(f"Error removing partially created LLM file {llm_filtered_file_name}: {e_del_llm}")
-        raise
-
-@celery_app.task(name='celery_tasks.format_text_file')
-def format_text_file(llm_filtered_txt_file_name: str): # llm_filtered_txt_file_name은 순수 파일명
-    """
-    logs 디렉토리에 있는 LLM 필터링된 .txt 파일(llm_filtered_txt_file_name)의 내용을 읽어
-    50자마다 줄바꿈을 추가하고, rag_..._formatted.txt 접미사를 붙여 새로운 파일로 저장합니다.
-    llm_filtered_txt_file_name: logs 디렉토리 내의 LLM 필터링된 .txt 파일 이름
-                                (예: llm_filtered_job_posting_... .txt)
-    """
-    logger.info(f"Attempting to format LLM-filtered text file for RAG (simple 50-char split): {llm_filtered_txt_file_name}")
-    logs_dir = "logs" # 현재 파일 위치 기준 상대 경로
-    # llm_filtered_txt_file_name이 순수 파일명이므로, logs_dir와 결합하여 전체 경로 생성
-    llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_txt_file_name)
-
-    if not os.path.exists(llm_filtered_file_path):
-        error_msg = f"LLM-filtered text file not found for formatting: {llm_filtered_file_path}"
-        logger.error(error_msg)
-        raise FileNotFoundError(error_msg)
-
-    rag_formatted_text_file_name = ""
-
-    try:
-        logger.debug(f"Reading LLM-filtered text file: {llm_filtered_file_path}")
-        with open(llm_filtered_file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        
-        logger.info(f"Successfully read LLM-filtered text file: {llm_filtered_file_path}. Content length: {len(content)}")
-        logger.debug(f"LLM-filtered content (first 200 chars before formatting): {content[:200]}")
-
-        # 50자 단위로 줄바꿈 추가
-        formatted_lines = []
-        # 만약 content가 매우 길 경우, 이 방식은 메모리 비효율적일 수 있음. 스트리밍 방식 고려 가능.
-        for i in range(0, len(content), 50):
-            formatted_lines.append(content[i:i+50])
-        
-        formatted_content = "\n".join(formatted_lines)
-
-        logger.info(f"Successfully formatted text content for RAG (simple 50-char split). New length: {len(formatted_content)}")
-        logger.debug(f"Formatted content for RAG (first 3 lines): {formatted_lines[:3]}")
-        logger.debug(f"Formatted content for RAG (last 3 lines): {formatted_lines[-3:] if len(formatted_lines) > 3 else formatted_lines}")
-
-        # 파일 이름 생성: llm_filtered_job_posting_... .txt -> rag_job_posting_..._formatted.txt
-        # llm_filtered_txt_file_name은 순수 파일명
-        base_name_without_ext = os.path.splitext(llm_filtered_txt_file_name)[0]
-        # "llm_filtered_job_posting_" 프리픽스가 있다면 "rag_job_posting_"으로 교체
-        if base_name_without_ext.startswith("llm_filtered_job_posting_"):
-            base_name = base_name_without_ext.replace("llm_filtered_job_posting_", "rag_job_posting_")
-        else:
-            # 예상치 못한 형식이지만, 일단 "rag_" 프리픽스 추가
-            logger.warning(f"Unexpected format for llm_filtered_txt_file_name: {llm_filtered_txt_file_name}. Prepending 'rag_'.")
-            base_name = f"rag_{base_name_without_ext}"
-            
-        rag_formatted_text_file_name = f"{base_name}_formatted.txt" # 최종 RAG에 사용될 파일명
-        rag_formatted_text_file_path = os.path.join(logs_dir, rag_formatted_text_file_name)
-        
-        logger.debug(f"Writing formatted text for RAG to: {rag_formatted_text_file_path}")
-        with open(rag_formatted_text_file_path, "w", encoding="utf-8") as f:
-            f.write(formatted_content)
-        
-        logger.info(f"Text content from {llm_filtered_txt_file_name} was formatted for RAG and saved to {rag_formatted_text_file_path}")
-
-        return rag_formatted_text_file_name
-    except FileNotFoundError:
-        raise
-    except Exception as e:
-        error_msg = f"Failed to format LLM-filtered text file {llm_filtered_txt_file_name} for RAG: {e}"
-        logger.error(error_msg, exc_info=True)
-        if rag_formatted_text_file_name and os.path.exists(os.path.join(logs_dir, rag_formatted_text_file_name)):
-            logger.debug(f"Attempting to remove partially created RAG formatted file: {rag_formatted_text_file_name}")
-            os.remove(os.path.join(logs_dir, rag_formatted_text_file_name))
         raise 
