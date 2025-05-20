@@ -409,6 +409,20 @@ def perform_processing(self, job_url: str, user_story: str, job_site_name: str =
         )
         logger.info(f"Task {task_id}: 자기소개서 생성 완료. 원본 길이: {len(raw_cover_letter)}, 포맷된 버전 길이: {len(formatted_cover_letter)}")
         
+        # 생성된 자기소개서 파일로 저장
+        # 파일명 형식: cover_letter_YYYYMMDD_UUIDshort.txt
+        try:
+            current_date_str = datetime.datetime.now().strftime("%Y%m%d")
+            unique_id_for_cv = uuid.uuid4().hex[:8]
+            cover_letter_filename = f"cover_letter_{current_date_str}_{unique_id_for_cv}.txt"
+            cover_letter_path = os.path.join(logs_dir, cover_letter_filename)
+            with open(cover_letter_path, "w", encoding="utf-8") as f:
+                f.write(formatted_cover_letter) # 포맷팅된 버전 저장
+            logger.info(f"Task {task_id}: 생성된 자기소개서 저장 완료: {cover_letter_path}")
+        except Exception as e_save_cv:
+            logger.error(f"Task {task_id}: 생성된 자기소개서 파일 저장 중 오류 발생: {e_save_cv}", exc_info=True)
+            # 저장 실패가 전체 작업 실패를 의미하지는 않도록 처리 (로깅만 하고 결과는 계속 반환)
+
         # 임시 파일들 삭제 (선택 사항, 최종 RAG 파일은 남겨둠)
         # files_to_delete_intermediate = [html_file_name, raw_text_file_name, llm_filtered_file_name] 
         # for f_name in files_to_delete_intermediate:
@@ -429,6 +443,7 @@ def perform_processing(self, job_url: str, user_story: str, job_site_name: str =
             "rag_file_used": rag_ready_file_name,
             "raw_cover_letter": raw_cover_letter,
             "formatted_cover_letter": formatted_cover_letter,
+            "generated_cover_letter_filename": cover_letter_filename if 'cover_letter_filename' in locals() else None, # 저장된 파일명도 결과에 추가
             "user_story_preview": user_story_for_generation[:200] + "..." if user_story_for_generation else "N/A"
         }
 
