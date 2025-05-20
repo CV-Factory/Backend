@@ -12,6 +12,7 @@ import uuid
 from celery.exceptions import MaxRetriesExceededError
 from dotenv import load_dotenv
 import google.generativeai as genai
+import datetime # datetime 모듈 추가
 
 # 전역 로깅 레벨 및 라이브러리 로깅 레벨 조정
 logging.basicConfig(level=logging.INFO)
@@ -236,9 +237,10 @@ def extract_body_html_from_url(url: str):
                         # logs_dir_name = "." # 현재 디렉토리에 저장하는 대신 오류 발생
                         raise # 디렉토리 생성 실패 시 오류 발생시킴
 
-                sanitized_name = sanitize_filename(url)
-                # 저장될 파일의 이름 (logs 디렉토리 제외)
-                file_basename = f"body_html_recursive_{sanitized_name}.html"
+                # 새로운 파일명 생성 로직: YYYYMMDD_UUIDshort.html
+                current_date_str = datetime.datetime.now().strftime("%Y%m%d")
+                unique_id = uuid.uuid4().hex[:8] # 8자리 고유 ID
+                file_basename = f"{current_date_str}_{unique_id}.html"
                 absolute_file_path = os.path.join(logs_dir_name, file_basename)
                 
                 try:
