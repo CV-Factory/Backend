@@ -396,10 +396,11 @@ def perform_processing(self, job_url: str, user_story: str | None = None):
 def extract_text_from_html_file(html_file_name: str):
     """
     logs 디렉토리 내의 지정된 HTML 파일에서 텍스트를 추출하여 파일로 저장합니다.
+    추출된 텍스트는 하나의 긴 문자열 형태이며, 연속된 공백은 단일 공백으로 처리됩니다.
     저장 후, 생성된 텍스트 파일의 이름(logs 디렉토리 기준 상대 경로)을 반환합니다.
     입력 html_file_name은 logs 디렉토리를 제외한 파일명이어야 합니다.
     """
-    logger.info(f"Attempting to extract text from HTML file: {html_file_name} (expected in logs/)")
+    logger.info(f"Attempting to extract text from HTML file as a single line: {html_file_name} (expected in logs/)")
     
     logs_dir = "logs"
     html_file_path = os.path.join(logs_dir, html_file_name)
@@ -419,11 +420,16 @@ def extract_text_from_html_file(html_file_name: str):
         for script_or_style in soup(["script", "style"]):
             script_or_style.decompose()
         
-        text_content = soup.get_text(separator='\n', strip=True)
-        text_content = re.sub(r'\n\s*\n', '\n', text_content) # 여러 빈 줄을 하나로
+        # 텍스트를 공백으로 구분하여 가져오고, strip=True로 각 요소의 앞뒤 공백 제거
+        text_content_from_soup = soup.get_text(separator=' ', strip=True)
+        # 위에서 얻은 텍스트에서 연속된 공백 (줄바꿈 포함)을 단일 공백으로 변경하고, 전체 문자열의 앞뒤 공백 제거
+        final_text_content = re.sub(r'\s+', ' ', text_content_from_soup).strip()
         
-        if not text_content:
-            logger.warning(f"No text content extracted from {html_file_name}. The file might be empty or contain no text.")
+        if not final_text_content:
+            logger.warning(f"No text content extracted from {html_file_name} after processing. The file might be empty or contain no text.")
+        else:
+            logger.debug(f"Extracted single-line text (first 300 chars): {final_text_content[:300]}")
+            logger.debug(f"Extracted single-line text (last 300 chars): {final_text_content[-300:]}")
 
         # 원본 HTML 파일명에서 확장자 제거하고 _text.txt 추가
         base_name_without_ext = os.path.splitext(html_file_name)[0]
@@ -433,16 +439,16 @@ def extract_text_from_html_file(html_file_name: str):
         output_txt_path = os.path.join(logs_dir, output_txt_basename)
         
         with open(output_txt_path, 'w', encoding='utf-8') as f:
-            f.write(text_content)
+            f.write(final_text_content)
             
-        logger.info(f"Text content successfully extracted from '{html_file_name}' and saved to '{output_txt_basename}' in logs directory.")
+        logger.info(f"Single-line text content successfully extracted from '{html_file_name}' and saved to '{output_txt_basename}' in logs directory.")
         return output_txt_basename # logs 디렉토리 기준 상대 경로 (파일명) 반환
         
     except FileNotFoundError: # 위에서 이미 체크했지만, 이중 방어
         logger.error(f"Error: HTML file '{html_file_name}' not found at '{html_file_path}'.", exc_info=True) # 이미 위에서 명시적으로 발생시킴
         raise
     except Exception as e:
-        logger.error(f"Error extracting text from HTML file '{html_file_name}': {e}", exc_info=True)
+        logger.error(f"Error extracting single-line text from HTML file '{html_file_name}': {e}", exc_info=True)
         raise
 
 @celery_app.task(name='celery_tasks.format_text_file')
@@ -450,9 +456,9 @@ def format_text_file(original_txt_file_name: str):
     """
     logs 디렉토리에 있는 .txt 파일의 내용을 읽어 50자마다 줄바꿈을 추가하고,
     _formatted.txt 접미사를 붙여 새로운 파일로 저장합니다.
-    original_txt_file_name: logs 디렉토리 내의 원본 .txt 파일 이름
+    original_txt_file_name: logs 디렉토리 내의 원본 .txt 파일 이름 (한 줄로 된 텍스트를 포함할 것으로 예상)
     """
-    logger.info(f"Attempting to format text file: {original_txt_file_name}")
+    logger.info(f"Attempting to format text file (simple 50-char split): {original_txt_file_name}")
     logs_dir = "logs"
     original_file_path = os.path.join(logs_dir, original_txt_file_name)
 
@@ -462,55 +468,60 @@ def format_text_file(original_txt_file_name: str):
         raise FileNotFoundError(error_msg)
 
     try:
-        logger.debug(f"Reading original text file: {original_file_path}")
+        logger.debug(f"Reading original text file (expected to be single line): {original_file_path}")
         with open(original_file_path, "r", encoding="utf-8") as f:
             original_text_content = f.read()
         logger.info(f"Successfully read original text file: {original_file_path}. Content length: {len(original_text_content)}")
-
-        # 기존 줄바꿈을 기준으로 먼저 분리하고, 각 줄에 대해 50자 처리를 할 수도 있으나,
-        # 여기서는 전체 텍스트를 하나의 긴 문자열로 보고 50자마다 줄바꿈을 삽입합니다.
-        # 먼저 기존 줄바꿈 문자를 공백으로 대체하여 한 줄로 만듭니다 (선택 사항).
-        text_for_formatting = original_text_content.replace("\\n", " ").strip() # 기존 개행문자를 공백으로 변경하고 양쪽 공백 제거
-        # logger.debug(f"Text for formatting after replacing newlines: '{text_for_formatting[:200]}...'") # 디버그 로그 추가
-
-        formatted_lines = []
-        if not text_for_formatting: # 빈 문자열인 경우 빈 리스트 유지
-            logger.info("Text content is empty after replacing newlines, formatted file will be empty.")
-        else:
-            for i in range(0, len(text_for_formatting), 50):
-                formatted_lines.append(text_for_formatting[i:i+50])
         
-        formatted_text_content = "\n".join(formatted_lines)
-        logger.info(f"Successfully formatted text content. New length: {len(formatted_text_content)}")
+        # 혹시 모를 줄바꿈과 연속 공백을 최종 정리 (이전 단계에서 처리되었을 것으로 예상되나 안전장치)
+        single_long_line = re.sub(r'\s+', ' ', original_text_content).strip()
+        if not single_long_line: # 비어있는 경우
+             logger.info("Original text content is empty after stripping whitespace, formatted file will be empty.")
+             formatted_text_content = ""
+        else:
+            logger.debug(f"Content to be split (first 200 chars): '{single_long_line[:200]}...'")
+            formatted_lines = []
+            current_pos = 0
+            while current_pos < len(single_long_line):
+                segment = single_long_line[current_pos:current_pos+50]
+                formatted_lines.append(segment)
+                # logger.debug(f"  Added segment: '{segment}'") # 필요시 상세 로깅
+                current_pos += 50
+            formatted_text_content = "\n".join(formatted_lines)
+        
+        logger.info(f"Successfully formatted text content (simple 50-char split). New length: {len(formatted_text_content)}")
+        if formatted_text_content: # 내용이 있을 때만 앞/뒤 일부 로깅
+            logger.debug(f"Formatted content (first 200 chars): {formatted_text_content[:200]}")
+            logger.debug(f"Formatted content (last 200 chars): {formatted_text_content[-200:]}")
 
         base_name, ext = os.path.splitext(original_txt_file_name)
-        # formatted_txt_file_name = f"{base_name}_formatted{ext}" # 이전 파일명 방식
-        formatted_txt_file_name = f"{base_name}_formatted.txt" # 명시적으로 .txt 사용
+        # 이름 충돌을 피하기 위해 _formatted_simple.txt 와 같이 변경할 수도 있으나, 일단 유지
+        formatted_txt_file_name = f"{base_name}_formatted.txt" 
         formatted_file_path = os.path.join(logs_dir, formatted_txt_file_name)
 
         logger.debug(f"Writing formatted text to: {formatted_file_path}")
         with open(formatted_file_path, "w", encoding="utf-8") as f:
             f.write(formatted_text_content)
         
-        success_msg = f"Text content from {original_txt_file_name} was formatted and saved to {formatted_file_path}"
+        success_msg = f"Text content from {original_txt_file_name} was formatted (simple 50-char split) and saved to {formatted_file_path}"
         logger.info(success_msg)
 
-        # 원본 파일 삭제 로직 추가
+        # 원본 파일 삭제 로직 (필요시 유지)
         try:
             os.remove(original_file_path)
             logger.info(f"Successfully deleted original file: {original_file_path}")
         except OSError as e:
             logger.warning(f"Could not delete original file {original_file_path}: {e}", exc_info=True)
         
-        return formatted_txt_file_name # 성공 메시지 대신 파일명 반환
+        return formatted_txt_file_name
 
     except FileNotFoundError: # 위에서 이미 처리했지만, 이중 확인
         raise
     except IOError as e:
-        error_msg = f"IOError during text formatting for {original_txt_file_name}: {e}"
+        error_msg = f"IOError during simple text formatting for {original_txt_file_name}: {e}"
         logger.error(error_msg, exc_info=True)
         raise
     except Exception as e:
-        error_msg = f"An unexpected error occurred during text formatting for {original_txt_file_name}: {e}"
+        error_msg = f"An unexpected error occurred during simple text formatting for {original_txt_file_name}: {e}"
         logger.error(error_msg, exc_info=True)
         raise 
