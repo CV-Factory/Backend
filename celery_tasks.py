@@ -611,18 +611,12 @@ def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name�
                 model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
                 
                 # 프롬프트 문자열 따옴표 수정: f"""...""" 형태를 유지
-                prompt = f"""다음 텍스트에서 실제 채용 공고 내용과 직접적으로 관련된 부분만 추출해주세요. (예: 회사 소개, 자격 요건, 담당 업무, 우대 사항, 복지 및 혜택, 전형 절차 등). 웹사이트 메뉴, 푸터, 관련 없는 뉴스, 광고, 개인정보처리방침, 이용약관 등의 내용은 제외해주세요.
+                prompt = f"""다음 텍스트에서 실제 채용 공고 내용과 직접적으로 관련된 부분만 추출해주세요.
 
-추출할 내용이 없다면 '추출할 내용 없음'이라고 답변해주세요.
+                            추출할 내용이 없다면 '추출할 내용 없음'이라고 답변해주세요.
 
----
-[원본 텍스트 시작]
-{text_for_llm}
-[원본 텍스트 끝]
----
-
-추출된 내용:
-"""
+                            {text_for_llm}
+                            """
                 
                 response = model.generate_content(
                     prompt,
