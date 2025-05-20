@@ -363,8 +363,8 @@ def perform_processing(self, job_url: str, user_story: str, job_site_name: str =
         logger.info(f"Task {task_id}: 2단계: {html_file_name} 에서 전체 텍스트 추출 시도")
         raw_text_file_name = extract_text_from_html_file(html_file_name)
         if not raw_text_file_name:
-             logger.error(f"Task {task_id}: 텍스트 추출 실패 (extract_text_from_html_file 반환값 없음)")
-             raise RuntimeError("Failed to extract text from HTML file.")
+            logger.error(f"Task {task_id}: 텍스트 추출 실패 (extract_text_from_html_file 반환값 없음)")
+            raise RuntimeError("Failed to extract text from HTML file.")
         logger.info(f"Task {task_id}: 전체 텍스트 추출 성공, 파일명: {raw_text_file_name}")
 
         # 3단계: 추출된 전체 텍스트를 LLM으로 필터링
@@ -408,16 +408,16 @@ def perform_processing(self, job_url: str, user_story: str, job_site_name: str =
         logger.info(f"Task {task_id}: 자기소개서 생성 완료. 원본 길이: {len(raw_cover_letter)}, 포맷된 버전 길이: {len(formatted_cover_letter)}")
         
         # 임시 파일들 삭제 (선택 사항, 최종 RAG 파일은 남겨둠)
-        files_to_delete_intermediate = [html_file_name, raw_text_file_name, llm_filtered_file_name] 
-        for f_name in files_to_delete_intermediate:
-            try:
-                if f_name: 
-                    f_path = os.path.join(logs_dir, f_name)
-                    if os.path.exists(f_path):
-                        os.remove(f_path)
-                        logger.info(f"Task {task_id}: 중간 파일 삭제 성공: {f_path}")
-            except Exception as e_del: # 변수명 변경
-                logger.warning(f"Task {task_id}: 중간 파일 삭제 중 오류 ({f_name}): {e_del}")
+        # files_to_delete_intermediate = [html_file_name, raw_text_file_name, llm_filtered_file_name] 
+        # for f_name in files_to_delete_intermediate:
+        #     try:
+        #         if f_name: 
+        #             f_path = os.path.join(logs_dir, f_name)
+        #             if os.path.exists(f_path):
+        #                 os.remove(f_path)
+        #                 logger.info(f"Task {task_id}: 중간 파일 삭제 성공: {f_path}")
+        #     except Exception as e_del: # 변수명 변경
+        #         logger.warning(f"Task {task_id}: 중간 파일 삭제 중 오류 ({f_name}): {e_del}")
 
 
         return {
@@ -480,7 +480,7 @@ def extract_text_from_html_file(html_file_name: str):
         raise FileNotFoundError(error_msg)
     
     extracted_text_file_name = "" # 초기화
-
+    
     try:
         with open(html_file_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
