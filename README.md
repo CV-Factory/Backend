@@ -102,7 +102,7 @@ To run the cover letter generation script using the Conda environment created in
     The generated cover letter will be printed to the console and saved to `logs/generated_cover_letter_formatted.txt`.
 
 Key Endpoints:
-- `POST /`: Initiate the main processing task for a given URL and optional query.
+- `POST /`: Initiate the main processing task for a given URL and optional prompt.
 - `POST /launch-inspector`: Launch Playwright inspector for a URL (useful for debugging scraping).
 - `POST /extract-body`: Initiate task to extract `<body>` HTML from a URL, including flattening iframes.
 - `POST /extract-text-from-html`: Initiate task to extract text content from a saved HTML file in the `logs` directory.

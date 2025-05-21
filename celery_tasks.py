@@ -329,7 +329,7 @@ def open_url_with_playwright_inspector(url: str):
         raise
 
 @celery_app.task(bind=True, name='celery_tasks.perform_processing', max_retries=3, default_retry_delay=60)
-def perform_processing(self, job_url: str, user_story: str, job_site_name: str = "unknown_site"):
+def perform_processing(self, job_url: str, prompt: str, job_site_name: str = "unknown_site"):
     task_id = self.request.id
     logger.info(f"Task {task_id} (UUID: {uuid.uuid4()}): perform_processing 시작, job_url: {job_url}, job_site_name: {job_site_name}")
 
@@ -338,12 +338,12 @@ def perform_processing(self, job_url: str, user_story: str, job_site_name: str =
         self.update_state(state='FAILURE', meta={'exc_type': 'ValueError', 'exc_message': 'job_url is required'})
         raise ValueError("job_url is required") # Celery는 이 예외를 잡고 작업을 실패로 표시
 
-    # user_story가 None일 경우를 대비한 처리
-    user_story_for_generation = user_story if user_story is not None else ""
-    if not user_story:
-        logger.warning(f"Task {task_id}: 사용자 스토리가 제공되지 않았습니다. 자기소개서 생성은 채용 공고 기반으로만 진행될 수 있습니다.")
+    # prompt가 None일 경우를 대비한 처리
+    prompt_for_generation = prompt if prompt is not None else ""
+    if not prompt:
+        logger.warning(f"Task {task_id}: 사용자 프롬프트가 제공되지 않았습니다. 자기소개서 생성은 채용 공고 기반으로만 진행될 수 있습니다.")
     else:
-        logger.info(f"Task {task_id}: 사용자 스토리 (앞부분): {user_story_for_generation[:100]}...")
+        logger.info(f"Task {task_id}: 사용자 프롬프트 (앞부분): {prompt_for_generation[:100]}...")
     
     html_file_name = None
     raw_text_file_name = None
@@ -401,11 +401,11 @@ def perform_processing(self, job_url: str, user_story: str, job_site_name: str =
         logger.debug(f"Task {task_id}: RAG에 사용될 최종 콘텐츠 (처음 200자): {job_posting_content_for_rag[:200]}")
 
         # 6단계: 커버 레터 생성 (RAG)
-        logger.info(f"Task {task_id}: 6단계: 자기소개서 생성 시도. User story (앞부분): {user_story_for_generation[:100]}... Job posting (앞부분): {job_posting_content_for_rag[:100]}...")
+        logger.info(f"Task {task_id}: 6단계: 자기소개서 생성 시도. User prompt (앞부분): {prompt_for_generation[:100]}... Job posting (앞부분): {job_posting_content_for_rag[:100]}...")
         # generate_cover_letter_semantic.py의 generate_cover_letter 함수가 (raw, formatted) 튜플을 반환한다고 가정
         raw_cover_letter, formatted_cover_letter = generate_cover_letter(
             job_posting_content=job_posting_content_for_rag, 
-            user_story=user_story_for_generation 
+            prompt=prompt_for_generation 
         )
         logger.info(f"Task {task_id}: 자기소개서 생성 완료. 원본 길이: {len(raw_cover_letter)}, 포맷된 버전 길이: {len(formatted_cover_letter)}")
         
@@ -444,7 +444,7 @@ def perform_processing(self, job_url: str, user_story: str, job_site_name: str =
             "raw_cover_letter": raw_cover_letter,
             "formatted_cover_letter": formatted_cover_letter,
             "generated_cover_letter_filename": cover_letter_filename if 'cover_letter_filename' in locals() else None, # 저장된 파일명도 결과에 추가
-            "user_story_preview": user_story_for_generation[:200] + "..." if user_story_for_generation else "N/A"
+            "user_story_preview": prompt_for_generation[:200] + "..." if prompt_for_generation else "N/A"
         }
 
     except FileNotFoundError as e_fnf: # 변수명 변경

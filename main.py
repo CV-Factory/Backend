@@ -40,7 +40,7 @@ app.add_middleware(
 
 class ProcessRequest(BaseModel):
     job_url: str
-    user_story: str | None = None
+    prompt: str | None = None
 
 class TaskStatusResponse(BaseModel):
     task_id: str
@@ -98,12 +98,12 @@ async def start_extract_text_task(file_name: str = Query(..., description=".html
 @app.post("/", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
 async def start_processing_task(request: ProcessRequest):
     log_message_prefix = f"요청 수신 (비동기 작업 시작): URL='{request.job_url}'"
-    if request.user_story:
-        log_message_prefix += f", UserStory='{request.user_story}'"
+    if request.prompt:
+        log_message_prefix += f", Prompt='{request.prompt}'"
     logger.info(log_message_prefix)
     try:
         # Celery 작업 호출 (.delay()는 .apply_async()의 단축형)
-        task = perform_processing.delay(request.job_url, request.user_story)
+        task = perform_processing.delay(request.job_url, request.prompt)
         logger.info(f"Celery 작업 시작됨. Task ID: {task.id}")
         return TaskStatusResponse(task_id=task.id, status="PENDING")
     except Exception as e:
