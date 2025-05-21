@@ -66,7 +66,8 @@ def generate_cover_letter(job_posting_content: str, prompt: str | None = None):
 
     # 모델 초기화
     try:
-        llm = GoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=GEMINI_API_KEY)
+        # 검증된 최신 모델: gemini-2.5-flash-preview-05-20 (변경 시 주의)
+        llm = GoogleGenerativeAI(model="gemini-2.5-flash-preview-05-20", google_api_key=GEMINI_API_KEY)
         embeddings = CohereEmbeddings(model="embed-multilingual-v3.0", cohere_api_key=COHERE_API_KEY, user_agent="langchain")
         logger.debug("LLM 및 Embeddings 모델 초기화 성공")
     except Exception as e:
