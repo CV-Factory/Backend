@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED True
 ENV APP_HOME /app
 ENV PORT 8080
 # Celery가 사용할 Redis URL (컨테이너 내부 Redis 사용 예정이므로 주석 처리 또는 localhost로 변경)
-# ENV REDIS_URL redis://your-redis-host:6379/0
+# ENV REDIS_URL redis://your-redis-host:6379/0 
 # Gemini API Key (Cloud Run 서비스 환경 변수 또는 Secret Manager에서 설정)
 # ENV GEMINI_API_KEY your_api_key
 
@@ -43,7 +43,7 @@ RUN chmod +x entrypoint.sh
 EXPOSE ${PORT}
 
 # Supervisor 실행 (entrypoint.sh 에서 처리)
-ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["./entrypoint.sh"] 
 # CMD는 entrypoint.sh 내부 로직에 따라 결정되거나, 여기서 supervisor 직접 실행을 명시할 수도 있습니다.
 # CMD ["supervisord", "-n"] # entrypoint.sh 를 사용하지 않을 경우
 CMD ["all"] # entrypoint.sh 에서 "all" 명령을 받아 supervisor를 실행하도록 수정 예정 
