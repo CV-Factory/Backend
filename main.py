@@ -139,6 +139,11 @@ async def get_task_status(task_id: str):
         # 존재하지 않는 task_id 등의 경우 Celery 내부에서 예외가 발생할 수 있음
         raise HTTPException(status_code=404, detail=f"Task not found or error fetching status: {str(e)}")
 
+@app.get("/")
+async def health_check():
+    logger.info("Health check endpoint called")
+    return {"status": "ok", "message": "Welcome to CVFactory Server!"}
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     logger.info(f"로컬에서 FastAPI 서버 시작 (포트: {port})")
