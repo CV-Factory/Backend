@@ -1,0 +1,37 @@
+steps:
+# Build the container image
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/cvfactory/cvfactory-server:latest', '.']
+# Push the container image to Artifact Registry
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/cvfactory/cvfactory-server:latest']
+# Deploy container image to Cloud Run
+- name: 'gcr.io/cloud-builders/gcloud'
+  entrypoint: gcloud
+  args:
+    - 'run'
+    - 'deploy'
+    - 'cvfactory-server' # Your Cloud Run service name
+    - '--image'
+    - 'us-central1-docker.pkg.dev/$PROJECT_ID/cvfactory/cvfactory-server:latest'
+    - '--region'
+    - 'us-central1' # Your preferred region
+    - '--platform'
+    - 'managed'
+    - '--allow-unauthenticated' # Allow unauthenticated access, adjust as needed
+    - '--port'
+    - '8000' # Port exposed by your FastAPI app in Dockerfile
+    - '--cpu'
+    - '1' # CPU allocation
+    - '--memory'
+    - '512Mi' # Memory allocation
+    - '--min-instances'
+    - '0' # Minimum number of instances
+    - '--max-instances'
+    - '1' # Maximum number of instances, adjust based on expected load and cost
+    - '--set-env-vars'
+    - '^#^PYTHONUNBUFFERED=1#CELERY_BROKER_URL=redis://localhost:6379/0#CELERY_RESULT_BACKEND=redis://localhost:6379/0' # Environment variables
+images:
+- 'us-central1-docker.pkg.dev/$PROJECT_ID/cvfactory/cvfactory-server:latest'
+options:
+  logging: CLOUD_LOGGING_ONLY 
