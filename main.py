@@ -7,6 +7,7 @@ from pydantic import BaseModel, HttpUrl
 from typing import Any
 from celery_tasks import perform_processing, open_url_with_playwright_inspector, extract_body_html_from_url, extract_text_from_html_file
 from celery.result import AsyncResult
+import time
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -112,32 +113,54 @@ async def start_processing_task(request: ProcessRequest):
 
 @app.get("/tasks/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str):
-    logger.info(f"작업 상태 조회 요청. Task ID: {task_id}")
+    logger.info(f"작업 상태 조회 요청 시작. Task ID: {task_id}")
+    start_time = time.time()
     try:
+        logger.info(f"AsyncResult 객체 생성 시도. Task ID: {task_id}")
         task_result = AsyncResult(task_id)
+        # logger.info(f"Task ID: {task_id}, Backend: {task_result.backend}") # 필요시 백엔드 정보 로깅
+
+        logger.info(f"Task ID: {task_id}, 상태 가져오기 시도...")
+        status = task_result.status # 이 호출에서 블로킹이 발생할 수 있음
+        logger.info(f"Task ID: {task_id}, 상태: {status}")
+
+        result = None
+        # 작업이 준비되었는지 (성공/실패 무관) 확인 후 결과 조회
+        if task_result.ready():
+             logger.info(f"Task ID: {task_id}, 작업 준비됨 (ready). 결과 가져오기 시도...")
+             result = task_result.result # 이 호출도 블로킹 가능성
+             logger.info(f"Task ID: {task_id}, 결과 가져오기 완료.")
+        else:
+             logger.info(f"Task ID: {task_id}, 작업 아직 준비되지 않음 (not ready).")
+
+
         response_data = {
             "task_id": task_id,
-            "status": task_result.status,
-            "result": task_result.result if task_result.successful() else None
+            "status": status,
+            "result": result # 성공/실패 시 실제 결과, 그 외에는 None 또는 이전 상태의 결과일 수 있음
         }
-        if task_result.failed():
-            logger.warning(f"작업 실패 (Task ID: {task_id}). 결과: {task_result.result}")
-            # 실패 시 result에 에러 정보를 포함시킬 수 있습니다.
-            # 예를 들어, task_result.traceback 등을 포함할 수 있으나, 
-            # 프로덕션에서는 민감한 정보 노출에 주의해야 합니다.
-            response_data['result'] = {"error": str(task_result.result), "traceback": task_result.traceback}
-        elif task_result.status == 'PENDING':
-             logger.info(f"작업 대기 중 (Task ID: {task_id})")
-        elif task_result.successful():
+
+        # 최종적으로 Celery 작업의 성공/실패 상태에 따라 로깅 및 result 재정의
+        if status == 'SUCCESS':
             logger.info(f"작업 성공 (Task ID: {task_id})")
+            # result는 이미 위에서 할당됨
+        elif status == 'FAILURE':
+            logger.warning(f"작업 실패 (Task ID: {task_id}). 저장된 결과: {result}")
+            # 실패 시 result는 일반적으로 예외 객체임
+            response_data['result'] = {"error": str(result), "traceback": task_result.traceback if result else None}
+        elif status == 'PENDING':
+             logger.info(f"작업 대기 중 (Task ID: {task_id})")
         else:
-            logger.info(f"작업 상태 (Task ID: {task_id}): {task_result.status}")
+            logger.info(f"작업 상태 (Task ID: {task_id}): {status}")
         
+        end_time = time.time()
+        logger.info(f"작업 상태 조회 완료 (Task ID: {task_id}). 소요 시간: {end_time - start_time:.4f}초")
         return TaskStatusResponse(**response_data)
     except Exception as e:
-        logger.error(f"작업 상태 조회 중 오류 발생 (Task ID: {task_id}): {e}", exc_info=True)
-        # 존재하지 않는 task_id 등의 경우 Celery 내부에서 예외가 발생할 수 있음
-        raise HTTPException(status_code=404, detail=f"Task not found or error fetching status: {str(e)}")
+        end_time = time.time()
+        logger.error(f"작업 상태 조회 중 심각한 오류 발생 (Task ID: {task_id}): {e}. 소요 시간: {end_time - start_time:.4f}초", exc_info=True)
+        # 클라이언트에는 좀 더 일반적인 오류 메시지를 반환하거나, 상황에 따라 다른 status_code 사용 가능
+        raise HTTPException(status_code=503, detail=f"Error fetching task status. Please try again later.")
 
 @app.get("/")
 async def health_check():
