@@ -11,9 +11,6 @@ echo "Entrypoint: PORT environment variable: $PORT"
 # echo "Entrypoint: REDIS_URL environment variable: $REDIS_URL"
 echo "Entrypoint: APP_MODULE for Celery: $APP_MODULE"
 
-# Supervisor 로그 디렉터리 생성
-mkdir -p /var/log/supervisor
-
 if [ "$1" = "all" ]; then
   echo "Starting supervisor to manage all services (Redis, FastAPI, Celery worker)..."
   exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf

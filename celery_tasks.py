@@ -41,7 +41,7 @@ except Exception as e_dotenv:
 # 상수 정의
 MAX_IFRAME_DEPTH = 3  # iframe 최대 재귀 깊이
 IFRAME_LOAD_TIMEOUT = 15000  # iframe 로드 타임아웃 (밀리초)
-ELEMENT_HANDLE_TIMEOUT = 5000 # element handle 가져오기 타임아웃 (밀리초)
+ELEMENT_HANDLE_TIMEOUT = 15000 # element handle 가져오기 타임아웃 (밀리초)
 
 def sanitize_filename(url: str) -> str:
     """URL을 기반으로 짧고 안전한 파일 이름을 생성합니다."""
