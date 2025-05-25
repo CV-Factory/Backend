@@ -103,6 +103,21 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
     ```
     생성된 자기소개서는 터미널에 출력되고 `logs/generated_cover_letter_formatted.txt` 파일에 저장됩니다.
 
+## ⚙️ CI/CD 파이프라인
+
+이 프로젝트는 CI/CD 파이프라인을 위해 Google Cloud Build를 사용합니다.
+
+-   **트리거**: GitHub 저장소의 `develop` 브랜치에 새로운 커밋이 푸시될 때 자동으로 시작됩니다.
+-   **플랫폼**: Google Cloud Build.
+-   **설정**: 빌드 및 배포 단계는 저장소 루트에 위치한 `cloudbuild.yaml` 파일에 정의되어 있습니다.
+-   **주요 단계**:
+    1.  **Docker 이미지 빌드**: `Dockerfile`을 기반으로 애플리케이션의 Docker 이미지를 빌드합니다.
+    2.  **Artifact Registry에 푸시**: 빌드된 이미지를 Google Artifact Registry (`asia-northeast3-docker.pkg.dev/cvfactory-456014/cvfactory/cvfactory-server`)에 푸시합니다.
+    3.  **Cloud Run에 배포**: 새 이미지를 `asia-northeast3` 리전의 Google Cloud Run (`cvfactory-server` 서비스)에 배포합니다.
+    4.  **리소스 설정**: 배포 시 특정 CPU, 메모리 및 인스턴스 수 설정을 적용합니다.
+    5.  **환경 변수**: `PYTHONUNBUFFERED=1`, `REDIS_URL=redis://localhost:6379/0` 와 같은 환경 변수를 설정합니다.
+    6.  **보안 비밀 관리**: `GEMINI_API_KEY`, `COHERE_API_KEY`와 같은 민감한 데이터를 Google Secret Manager를 사용하여 환경 변수로 안전하게 주입합니다.
+
 ## 📁 프로젝트 구조
 
 ```

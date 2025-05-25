@@ -111,6 +111,21 @@ Key Endpoints:
 
 Logs and extracted files will be saved to the `logs/` directory, which is mapped as a volume in `docker-compose.yml`.
 
+## ⚙️ CI/CD Pipeline
+
+This project uses Google Cloud Build for its CI/CD pipeline.
+
+-   **Trigger**: Automatically starts when new commits are pushed to the `develop` branch of the GitHub repository.
+-   **Platform**: Google Cloud Build.
+-   **Configuration**: Build and deployment steps are defined in the `cloudbuild.yaml` file located in the root of the repository.
+-   **Key Steps**:
+    1.  **Build Docker Image**: Builds the application's Docker image based on the `Dockerfile`.
+    2.  **Push to Artifact Registry**: Pushes the built image to Google Artifact Registry at `asia-northeast3-docker.pkg.dev/cvfactory-456014/cvfactory/cvfactory-server`.
+    3.  **Deploy to Cloud Run**: Deploys the new image to the `cvfactory-server` service on Google Cloud Run in the `asia-northeast3` region.
+    4.  **Resource Configuration**: Applies specific CPU, memory, and instance count settings during deployment.
+    5.  **Environment Variables**: Sets environment variables such as `PYTHONUNBUFFERED=1` and `REDIS_URL=redis://localhost:6379/0`.
+    6.  **Secrets Management**: Securely injects sensitive data like `GEMINI_API_KEY` and `COHERE_API_KEY` as environment variables using Google Secret Manager.
+
 ## 📁 Project Structure
 
 ```
