@@ -66,7 +66,7 @@ def generate_cover_letter(job_posting_content: str, prompt: str | None = None):
 
     # 모델 초기화
     try:
-        llm = ChatGroq(model="llama-3.1-8b-instant", groq_api_key=GROQ_API_KEY)
+        llm = ChatGroq(model="meta-llama/llama-4-maverick-17b-128e-instruct", groq_api_key=GROQ_API_KEY)
         embeddings = CohereEmbeddings(model="embed-multilingual-v3.0", cohere_api_key=COHERE_API_KEY, user_agent="langchain")
         logger.debug("LLM 및 Embeddings 모델 초기화 성공")
     except Exception as e:
