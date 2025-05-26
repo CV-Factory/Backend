@@ -5,7 +5,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_cohere import CohereEmbeddings
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain.chains import RetrievalQA
-from langchain_google_genai import GoogleGenerativeAI
+from langchain_groq import ChatGroq
 
 # 로깅 설정
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -53,12 +53,12 @@ def generate_cover_letter(job_posting_content: str, prompt: str | None = None):
     else:
         logger.warning(".env 파일 로드 실패 또는 찾을 수 없음 (generate_cover_letter 내부)")
 
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 
-    if not GEMINI_API_KEY:
-        logger.error("GEMINI_API_KEY가 설정되지 않았습니다.")
-        raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다.")
+    if not GROQ_API_KEY:
+        logger.error("GROQ_API_KEY가 설정되지 않았습니다.")
+        raise ValueError("GROQ_API_KEY가 설정되지 않았습니다.")
     if not COHERE_API_KEY:
         logger.error("COHERE_API_KEY가 설정되지 않았습니다.")
         raise ValueError("COHERE_API_KEY가 설정되지 않았습니다.")
@@ -66,7 +66,7 @@ def generate_cover_letter(job_posting_content: str, prompt: str | None = None):
 
     # 모델 초기화
     try:
-        llm = GoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=GEMINI_API_KEY)
+        llm = ChatGroq(model="llama-3.1-8b-instant", groq_api_key=GROQ_API_KEY)
         embeddings = CohereEmbeddings(model="embed-multilingual-v3.0", cohere_api_key=COHERE_API_KEY, user_agent="langchain")
         logger.debug("LLM 및 Embeddings 모델 초기화 성공")
     except Exception as e:

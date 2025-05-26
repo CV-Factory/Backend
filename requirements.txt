@@ -1,7 +1,7 @@
 fastapi
 uvicorn[standard]
 playwright
-google-generativeai
+# google-generativeai # 더 이상 사용하지 않음
 # langchain
 # langchain-community, langchain-upstage 등 RAG에 필요한 구체적인 langchain 패키지 추가
 langchain
@@ -10,7 +10,7 @@ langchain-upstage
 faiss-cpu
 langchain-cohere
 langchain-experimental
-langchain-google-genai
+langchain-groq  # Groq API 사용을 위해 추가
 celery
 redis
 beautifulsoup4 
