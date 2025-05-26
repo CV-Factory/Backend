@@ -1,6 +1,7 @@
 from celery_app import celery_app
 import logging
 from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 import os
 import re
 from bs4 import BeautifulSoup
@@ -15,6 +16,7 @@ import datetime # datetime 모듈 추가
 from langchain_groq import ChatGroq # Groq import 추가
 from langchain_core.prompts import ChatPromptTemplate # Langchain Prompt 추가
 from langchain_core.output_parsers import StrOutputParser # Langchain Output Parser 추가
+from typing import Optional # Optional 타입 어노테이션을 위해 추가
 
 # 전역 로깅 레벨 및 라이브러리 로깅 레벨 조정
 logging.basicConfig(level=logging.INFO)
