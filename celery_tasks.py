@@ -707,3 +707,69 @@ Here is the text to analyze:
             except Exception as e_del:
                 logger.error(f"Error removing partially created file {llm_filtered_file_path}: {e_del}")
         raise # 오류를 다시 발생시킴 
+
+async def extract_body_html_with_playwright_and_iframe(url: str, task_id: str = "N/A") -> Optional[str]:
+    """
+    Extracts the body HTML content from a given URL using Playwright,
+    handling potential iframes.
+    """
+    browser = None
+    page = None
+    try:
+        logger.info(f"Task {task_id}: Playwright를 사용하여 {url}에서 HTML 추출 시작.")
+        async with async_playwright() as p:
+            logger.info(f"Task {task_id}: Playwright 브라우저 실행 시도 (Chromium).")
+            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
+            logger.info(f"Task {task_id}: Playwright 브라우저 실행 완료.")
+            page = await browser.new_page()
+            logger.info(f"Task {task_id}: 새 페이지 생성 완료. URL로 이동 시도: {url}")
+            await page.goto(url, wait_until="networkidle", timeout=60000)  # Increased timeout to 60 seconds
+            logger.info(f"Task {task_id}: URL로 이동 완료: {url}")
+
+            # iframe 내부의 body HTML 추출 시도
+            logger.info(f"Task {task_id}: iframe 탐색 및 처리 시도.")
+            iframes = await page.query_selector_all("iframe")
+            logger.info(f"Task {task_id}: {len(iframes)}개의 iframe을 찾았습니다.")
+            for i, iframe_element in enumerate(iframes):
+                try:
+                    logger.info(f"Task {task_id}: {i+1}번째 iframe 처리 중...")
+                    iframe_content = await iframe_element.content_frame()
+                    if iframe_content:
+                        logger.info(f"Task {task_id}: {i+1}번째 iframe의 content frame을 가져왔습니다. HTML 추출 시도.")
+                        body_html = await iframe_content.inner_html("body")
+                        if body_html and body_html.strip():
+                            logger.info(f"Task {task_id}: {i+1}번째 iframe에서 body HTML 추출 성공 (길이: {len(body_html)}).")
+                            return body_html
+                        else:
+                            logger.warning(f"Task {task_id}: {i+1}번째 iframe의 body HTML이 비어있습니다.")
+                    else:
+                        logger.warning(f"Task {task_id}: {i+1}번째 iframe의 content frame을 가져올 수 없습니다.")
+                except Exception as e_iframe:
+                    logger.error(f"Task {task_id}: {i+1}번째 iframe 처리 중 오류 발생: {e_iframe}", exc_info=True)
+                    continue # 다음 iframe으로 넘어감
+
+            # iframe이 없거나 iframe에서 HTML을 추출하지 못한 경우, 메인 페이지의 body HTML 추출
+            logger.info(f"Task {task_id}: 메인 페이지에서 body HTML 추출 시도.")
+            main_body_html = await page.inner_html("body")
+            logger.info(f"Task {task_id}: 메인 페이지 body HTML 추출 성공 (길이: {len(main_body_html)}).")
+            return main_body_html
+
+    except TimeoutError as e_timeout:
+        logger.error(f"Task {task_id}: Playwright 작업 중 TimeoutError 발생 ({url}): {e_timeout}", exc_info=True)
+        return None
+    except Exception as e:
+        logger.error(f"Task {task_id}: Playwright 작업 중 오류 발생 ({url}): {e}", exc_info=True)
+        return None
+    finally:
+        if page:
+            try:
+                await page.close()
+                logger.info(f"Task {task_id}: Playwright 페이지를 닫았습니다.")
+            except Exception as e_close_page:
+                logger.error(f"Task {task_id}: Playwright 페이지 닫기 중 오류: {e_close_page}", exc_info=True)
+        if browser:
+            try:
+                await browser.close()
+                logger.info(f"Task {task_id}: Playwright 브라우저를 닫았습니다.")
+            except Exception as e_close_browser:
+                logger.error(f"Task {task_id}: Playwright 브라우저 닫기 중 오류: {e_close_browser}", exc_info=True) 
