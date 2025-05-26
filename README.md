@@ -125,6 +125,8 @@ This project uses Google Cloud Build for its CI/CD pipeline.
     4.  **Resource Configuration**: Applies specific CPU, memory, and instance count settings during deployment.
     5.  **Environment Variables**: Sets environment variables such as `PYTHONUNBUFFERED=1` and `REDIS_URL=redis://localhost:6379/0`.
     6.  **Secrets Management**: Securely injects sensitive data like `GEMINI_API_KEY` and `COHERE_API_KEY` as environment variables using Google Secret Manager.
+    7.  **Service Account**: The pipeline utilizes a dedicated user-managed service account (`cvfactory-builder-sa@cvfactory-456014.iam.gserviceaccount.com`) with least-privilege permissions for enhanced security.
+    8.  **Logging**: All build and application logs are configured to be sent to Cloud Logging for centralized monitoring, as defined by `logging: CLOUD_LOGGING_ONLY` in `cloudbuild.yaml`.
 
 ## 📁 Project Structure
 
@@ -133,14 +135,16 @@ This project uses Google Cloud Build for its CI/CD pipeline.
 ├── main.py           # FastAPI application entry point and API endpoints
 ├── celery_app.py     # Celery application instance configuration
 ├── celery_tasks.py   # Definitions of Celery background tasks (web scraping, parsing, formatting, etc.)
-├── Dockerfile        # Defines the Docker image for web and worker services (includes dependencies and Playwright setup)
-├── docker-compose.yml# Defines and configures the multi-container Docker application (web, worker, redis)
+├── Dockerfile        # Defines the Docker image for web and worker services (includes dependencies, Redis, Supervisor, and Playwright setup)
+├── docker-compose.yml# Defines and configures the multi-container Docker application for local development (web, worker, redis)
 ├── requirements.txt  # Lists Python dependencies required by the project
-├── entrypoint.sh     # Script executed inside containers to start either the web server or the Celery worker
-├── logs/             # Directory for application logs and generated files (mounted as a volume)
+├── entrypoint.sh     # Script executed inside the Docker container to start services (FastAPI, Celery, Redis) via Supervisor, or individual services.
+├── supervisord.conf  # Supervisor configuration file to manage FastAPI (Uvicorn), Celery worker, and Redis server processes within a single container for Cloud Run.
+├── cloudbuild.yaml   # Google Cloud Build configuration file for CI/CD (build, push to Artifact Registry, deploy to Cloud Run).
+├── generate_cover_letter_semantic.py # Script for generating cover letters using RAG and Gemini API
+├── logs/             # Directory for local application logs and generated files (mounted as a volume in local Docker Compose setup). In Cloud Run, logs are directed to Cloud Logging.
 ├── LICENSE           # License file (CC BY NC 4.0)
 ├── README_ko.md      # Korean README file
-├── generate_cover_letter_semantic.py # Script for generating cover letters using RAG and Gemini API
 ```
 
 ## 📄 License

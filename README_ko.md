@@ -117,6 +117,8 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
     4.  **리소스 설정**: 배포 시 특정 CPU, 메모리 및 인스턴스 수 설정을 적용합니다.
     5.  **환경 변수**: `PYTHONUNBUFFERED=1`, `REDIS_URL=redis://localhost:6379/0` 와 같은 환경 변수를 설정합니다.
     6.  **보안 비밀 관리**: `GEMINI_API_KEY`, `COHERE_API_KEY`와 같은 민감한 데이터를 Google Secret Manager를 사용하여 환경 변수로 안전하게 주입합니다.
+    7.  **서비스 계정**: 파이프라인은 향상된 보안을 위해 최소 권한 원칙에 따라 전용 사용자 관리형 서비스 계정 (`cvfactory-builder-sa@cvfactory-456014.iam.gserviceaccount.com`)을 활용합니다.
+    8.  **로깅**: 모든 빌드 및 애플리케이션 로그는 `cloudbuild.yaml`의 `logging: CLOUD_LOGGING_ONLY` 설정에 따라 중앙 집중식 모니터링을 위해 Cloud Logging으로 전송되도록 구성됩니다.
 
 ## 📁 프로젝트 구조
 
@@ -124,15 +126,17 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
 .
 ├── main.py           # FastAPI 애플리케이션 진입점 및 API 엔드포인트
 ├── celery_app.py     # Celery 애플리케이션 인스턴스 설정
-├── celery_tasks.py   # Celery 백그라운드 태스크 정의 (웹 스크래핑, 파싱, 형식화 등)
-├── Dockerfile        # 웹 및 워커 서비스용 Docker 이미지 정의 (종속성 및 Playwright 설정 포함)
-├── docker-compose.yml# 다중 컨테이너 Docker 애플리케이션 정의 및 설정 (web, worker, redis)
-├── requirements.txt  # 프로젝트에 필요한 Python 종속성 목록
-├── entrypoint.sh     # 컨테이너 내부에서 웹 서버 또는 Celery 워커를 시작하기 위해 실행되는 스크립트
-├── logs/             # 애플리케이션 로그 및 생성된 파일을 위한 디렉토리 (볼륨으로 마운트됨)
+├── celery_tasks.py   # Celery 백그라운드 작업 정의 (웹 스크레이핑, 파싱, 포맷팅 등)
+├── Dockerfile        # 웹 및 워커 서비스를 위한 Docker 이미지 정의 (의존성, Redis, Supervisor, Playwright 설정 포함)
+├── docker-compose.yml# 로컬 개발을 위한 멀티 컨테이너 Docker 애플리케이션 정의 및 설정 (web, worker, redis)
+├── requirements.txt  # 프로젝트에 필요한 Python 의존성 목록
+├── entrypoint.sh     # Docker 컨테이너 내부에서 Supervisor를 통해 서비스(FastAPI, Celery, Redis)를 시작하거나 개별 서비스를 시작하는 스크립트
+├── supervisord.conf  # Cloud Run을 위한 단일 컨테이너 내에서 FastAPI(Uvicorn), Celery 워커, Redis 서버 프로세스를 관리하는 Supervisor 설정 파일
+├── cloudbuild.yaml   # CI/CD를 위한 Google Cloud Build 설정 파일 (빌드, Artifact Registry에 푸시, Cloud Run에 배포)
+├── generate_cover_letter_semantic.py # RAG 및 Gemini API를 사용하여 자기소개서를 생성하는 스크립트
+├── logs/             # 로컬 애플리케이션 로그 및 생성된 파일 디렉토리 (로컬 Docker Compose 설정에서 볼륨으로 마운트됨). Cloud Run에서는 로그가 Cloud Logging으로 전송됩니다.
 ├── LICENSE           # 라이선스 파일 (CC BY NC 4.0)
-├── README.md         # 영어 README 파일
-└── generate_cover_letter_semantic.py: RAG 및 Gemini API를 활용한 자기소개서 생성 스크립트입니다.
+├── README.md         # 영문 README 파일
 ```
 
 ## 📄 라이선스
