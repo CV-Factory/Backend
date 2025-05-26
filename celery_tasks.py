@@ -574,122 +574,223 @@ def extract_text_from_html_file(html_file_name: str):
 
 @celery_app.task(name='celery_tasks.filter_job_posting_with_llm')
 def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name은 이제 순수 파일명
-    logger.info("Attempting to filter job posting with LLM.")
-    logger.info(f"Current GEMINI_API_KEY from env: {os.getenv('GEMINI_API_KEY')}")
-    logger.info(f"Current COHERE_API_KEY from env: {os.getenv('COHERE_API_KEY')}")
-    # 로드된 .env 또는 환경 변수에서 API 키 가져오기
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    cohere_api_key = os.getenv("COHERE_API_KEY") # Cohere API 키도 로깅 및 확인
+    """
+    주어진 원본 텍스트 파일의 내용을 읽어 LLM을 사용하여 채용 공고인지 아닌지를 판단하고,
+    채용 공고가 맞다면 필터링된 내용을 포함한 JSON 문자열을 반환하고,
+    아니라면 None을 반환합니다.
+    결과를 포함한 딕셔너리를 반환합니다:
+    {
+        "is_job_posting": True/False,
+        "filtered_content_json": "JSON string" or None,
+        "error": "error message" or None
+    }
+    오류 발생 시 is_job_posting은 False, error에 메시지를 담아 반환합니다.
+    """
+    # logger.info(f"Starting LLM filter for raw text file: {raw_text_file_name}")
+    # logs_dir_name = "logs"
+    # raw_text_file_path = os.path.join(logs_dir_name, raw_text_file_name)
 
-    if not gemini_api_key:
-        logger.error("CRITICAL: GEMINI_API_KEY is NOT SET in the Celery task environment!")
-        raise ValueError("GEMINI_API_KEY is not set.")
-    
-    if not cohere_api_key: # Cohere API 키도 확인
-        logger.error("CRITICAL: COHERE_API_KEY is NOT SET in the Celery task environment!")
-        # 일단 경고만 하고 진행하거나, 필요에 따라 여기서도 raise ValueError 가능
-        logger.warning("COHERE_API_KEY is not set. Some functionalities depending on Cohere might fail.")
+    # try:
+    #     if not os.path.exists(raw_text_file_path):
+    #         logger.error(f"Raw text file not found: {raw_text_file_path}")
+    #         return {
+    #             "is_job_posting": False,
+    #             "filtered_content_json": None,
+    #             "error": f"Raw text file not found: {raw_text_file_path}"
+    #         }
 
+    #     with open(raw_text_file_path, 'r', encoding='utf-8') as f:
+    #         raw_text = f.read()
+    #     logger.info(f"Successfully read raw text from: {raw_text_file_path}. Length: {len(raw_text)}")
 
-    # 현재 날짜와 시간을 포함하는 파일명 생성 (YYYYMMDD_HHMMSS_originalfile.txt 형식)
-    current_date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_name_without_ext = os.path.splitext(raw_text_file_name)[0]
-    # "text_content_from_html_" 프리픽스가 있다면 제거, 없다면 그대로 사용
-    if base_name_without_ext.startswith("text_content_from_html_"):
-        cleaned_base_name = base_name_without_ext.replace("text_content_from_html_", "")
-    else:
-        cleaned_base_name = base_name_without_ext # 예: 날짜_고유번호 형식 그대로 사용
+    #     if not raw_text.strip():
+    #         logger.warning(f"Raw text file is empty: {raw_text_file_path}")
+    #         return {
+    #             "is_job_posting": False,
+    #             "filtered_content_json": None,
+    #             "error": "Raw text file is empty."
+    #         }
         
-    llm_filtered_file_name = f"llm_filtered_job_posting_{cleaned_base_name}.txt"
-    llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_file_name)
-
-    filtered_text_content = ""
-
-    try:
-        with open(raw_text_file_path, "r", encoding="utf-8") as f:
-            raw_text_content = f.read()
-        logger.debug(f"Successfully read raw text file: {raw_text_file_path}. Content length: {len(raw_text_content)}")
+    #     # Gemini API 키 설정 확인
+    #     gemini_api_key = os.getenv("GEMINI_API_KEY")
+    #     if not gemini_api_key:
+    #         logger.error("GEMINI_API_KEY not found in environment variables.")
+    #         return {
+    #             "is_job_posting": False,
+    #             "filtered_content_json": None,
+    #             "error": "GEMINI_API_KEY not found in environment variables."
+    #         }
         
-        if not raw_text_content.strip():
-            logger.warning(f"Raw text content for {raw_text_file_name} is empty or whitespace. Skipping LLM filtering.")
-            filtered_text_content = "원본 내용 없음 (LLM 필터링 건너뜀)"
-        else:
-            # API 전송 전 줄바꿈 문자를 공백으로 치환하는 로직을 제거하고 원본 텍스트를 그대로 사용합니다.
-            text_for_llm = raw_text_content
-            logger.debug(f"Raw text (first 200 chars for LLM, newlines preserved): {text_for_llm[:200]}")
+    #     try:
+    #         genai.configure(api_key=gemini_api_key)
+    #         logger.info("Gemini API configured successfully.")
+    #     except Exception as e_configure:
+    #         logger.error(f"Error configuring Gemini API: {e_configure}", exc_info=True)
+    #         return {
+    #             "is_job_posting": False,
+    #             "filtered_content_json": None,
+    #             "error": f"Error configuring Gemini API: {e_configure}"
+    #         }
 
-            genai.configure(api_key=gemini_api_key)
+    #     # Gemini 모델 설정 (텍스트 요약 및 JSON 출력에 적합한 모델)
+    #     # model = genai.GenerativeModel('gemini-1.5-flash-latest') # 또는 gemini-pro
+    #     model_name = "gemini-1.5-flash-latest" # 또는 다른 적절한 모델
+    #     logger.info(f"Using Gemini model: {model_name}")
+        
+    #     generation_config = genai.types.GenerationConfig(
+    #         # response_mime_type=\"application/json\", # 직접 JSON 출력을 요청 (모델 지원 여부 확인 필요)
+    #         temperature=0.2, # 일관성 있는 출력을 위해 낮은 온도로 설정
+    #         # max_output_tokens=2048 # 필요시 최대 토큰 수 제한
+    #     )
+
+    #     # LLM에 전달할 프롬프트 (채용 공고 필터링 및 JSON 형식 출력 요청)
+    #     # 상세한 필드 정의 포함 (회사명, 직무, 자격요건, 근무조건, 마감일, 연락처 등)
+    #     prompt_template = f\"\"\"
+    #     다음 텍스트가 채용 공고인지 판단하고, 만약 채용 공고가 맞다면 아래 항목들을 추출하여 JSON 형식으로 반환해주세요. 
+    #     채용 공고가 아니라면 "is_job_posting": false만 포함된 JSON을 반환해주세요.
+
+    #     추출 항목:
+    #     - company_name: 회사명 (없으면 null)
+    #     - job_title: 직무 제목 (없으면 null)
+    #     - job_description: 주요 업무 내용 (없으면 null)
+    #     - qualifications: 자격 요건 (없으면 null)
+    #     - preferred_qualifications: 우대 사항 (없으면 null)
+    #     - employment_type: 근무 형태 (예: 정규직, 계약직, 인턴 등) (없으면 null)
+    #     - location: 근무지 (없으면 null)
+    #     - salary: 급여 조건 (없으면 null)
+    #     - application_period: 지원 기간 또는 마감일 (없으면 null)
+    #     - application_method: 지원 방법 (없으면 null)
+    #     - contact_information: 채용 담당자 연락처 또는 이메일 (없으면 null)
+    #     - benefits: 복리후생 (없으면 null)
+    #     - company_introduction: 회사 소개 (없으면 null)
+    #     - other_information: 기타 정보 (채용 공고와 관련된 추가 정보) (없으면 null)
+
+    #     반환 JSON 형식 예시 (채용 공고일 경우):
+    #     {{
+    #       "is_job_posting": true,
+    #       "posting_details": {{
+    #         "company_name": "OOO회사",
+    #         "job_title": "백엔드 개발자",
+    #         "job_description": "...",
+    #         "qualifications": "...",
+    #         // ... 나머지 항목들
+    #         "other_information": "..."
+    #       }}
+    #     }}
+
+    #     반환 JSON 형식 예시 (채용 공고가 아닐 경우):
+    #     {{
+    #       "is_job_posting": false
+    #     }}
+
+    #     분석할 텍스트:
+    #     ---
+    #     {raw_text}
+    #     ---
+    #     \"\"\"
+        
+    #     safety_settings = [
+    #         {
+    #             "category": "HARM_CATEGORY_HARASSMENT",
+    #             "threshold": "BLOCK_NONE",
+    #         },
+    #         {
+    #             "category": "HARM_CATEGORY_HATE_SPEECH",
+    #             "threshold": "BLOCK_NONE",
+    #         },
+    #         {
+    #             "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    #             "threshold": "BLOCK_NONE",
+    #         },
+    #         {
+    #             "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+    #             "threshold": "BLOCK_NONE",
+    #         },
+    #     ]
+        
+    #     try:
+    #         logger.info("Sending request to Gemini API...")
+    #         # response = model.generate_content(prompt_template, generation_config=generation_config, safety_settings=safety_settings)
+    #         # 직접 JSON 응답을 요청하는 대신, 텍스트 응답 후 파싱 시도
+    #         model = genai.GenerativeModel(model_name) # safety_settings는 여기에 포함될 수 있음
+    #         response = model.generate_content(
+    #             prompt_template, 
+    #             generation_config=generation_config,
+    #             safety_settings=safety_settings
+    #         )
+
+    #         logger.info(f"Received response from Gemini API. Finish reason: {response.prompt_feedback.block_reason if response.prompt_feedback else 'N/A'}")
             
-            generation_config_gemini = genai.types.GenerationConfig(
-                temperature=0.2,
-                top_p=0.8,
-                top_k=20,
-                max_output_tokens=8192,
-            )
-
-            try:
-                logger.info("Attempting to call Gemini API for text filtering...")
-                # 모델명을 'gemini-2.5-flash-preview-04-17'로 설정하고 try 블록 내부로 이동
-                model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
+    #         if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+    #             llm_output_text = response.candidates[0].content.parts[0].text
+    #             logger.info(f"LLM output text (first 200 chars): {llm_output_text[:200]}")
                 
-                # 프롬프트 문자열 따옴표 수정: f"""...""" 형태를 유지
-                prompt = f"""다음 텍스트에서 실제 채용 공고 내용과 직접적으로 관련된 부분만 추출해주세요.
+    #             # LLM 출력에서 JSON 부분만 추출 (```json ... ``` 형식 가정)
+    #             json_match = re.search(r"```json\s*([\s\S]+?)\s*```", llm_output_text)
+    #             if json_match:
+    #                 json_str = json_match.group(1)
+    #                 logger.info(f"Extracted JSON string: {json_str[:200]}")
+    #             else:
+    #                 # ```json ``` 블록이 없다면, 전체 텍스트를 JSON으로 가정
+    #                 json_str = llm_output_text
+    #                 logger.info(f"No JSON block found, assuming entire output is JSON: {json_str[:200]}")
 
-                            추출할 내용이 없다면 '추출할 내용 없음'이라고 답변해주세요.
+    #             try:
+    #                 parsed_json = json.loads(json_str)
+    #                 is_job_posting = parsed_json.get("is_job_posting", False) # 기본값 False
+                    
+    #                 if is_job_posting and "posting_details" in parsed_json:
+    #                     logger.info("LLM classified as a job posting.")
+    #                     return {
+    #                         "is_job_posting": True,
+    #                         "filtered_content_json": json.dumps(parsed_json["posting_details"], ensure_ascii=False), # posting_details만 반환
+    #                         "error": None
+    #                     }
+    #                 else:
+    #                     logger.info("LLM classified as NOT a job posting or JSON format is incorrect.")
+    #                     return {
+    #                         "is_job_posting": False,
+    #                         "filtered_content_json": None, # 채용 공고가 아니므로 내용은 없음
+    #                         "error": parsed_json.get("error_message") # LLM이 에러 메시지를 반환했을 경우
+    #                     }
+    #             except json.JSONDecodeError as json_err:
+    #                 logger.error(f"Failed to parse JSON from LLM output: {json_err}. Output was: {llm_output_text}", exc_info=True)
+    #                 return {
+    #                     "is_job_posting": False,
+    #                     "filtered_content_json": None,
+    #                     "error": f"JSON parsing error: {json_err}. LLM output: {llm_output_text[:200]}"
+    #                 }
+    #         else:
+    #             logger.warning("LLM response was empty or malformed.")
+    #             block_reason = response.prompt_feedback.block_reason if response.prompt_feedback else "Unknown reason"
+    #             safety_ratings_str = str(response.prompt_feedback.safety_ratings) if response.prompt_feedback else "N/A"
+    #             error_message = f"LLM response empty/malformed. Block Reason: {block_reason}. Safety Ratings: {safety_ratings_str}"
+    #             if response.candidates and not response.candidates[0].content.parts:
+    #                 error_message += f" Finish reason (candidate): {response.candidates[0].finish_reason}"
 
-                            {text_for_llm}
-                            """
-                
-                response = model.generate_content(
-                    prompt,
-                    generation_config=generation_config_gemini,
-                )
-                
-                if response.parts:
-                    filtered_text_content = response.text
-                    logger.info(f"Successfully filtered text using Gemini API. Filtered text length: {len(filtered_text_content)}")
-                    if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
-                        logger.warning("LLM returned empty or 'no content' response.")
-                        filtered_text_content = "LLM 필터링 결과 내용 없음"
-                else:
-                    logger.warning("Gemini API response did not contain any parts (candidates).")
-                    if response.prompt_feedback:
-                        logger.warning(f"Prompt feedback from API: {response.prompt_feedback}")
-                    filtered_text_content = "LLM 응답 없음 (API 반환 내용 없음)"
+    #             return {
+    #                 "is_job_posting": False,
+    #                 "filtered_content_json": None,
+    #                 "error": error_message
+    #             }
 
-            except google.api_core.exceptions.InvalidArgument as e:
-                logger.error(f"Gemini API InvalidArgument error: {e}", exc_info=True)
-                filtered_text_content = f"LLM API 요청 오류 (InvalidArgument): {str(e)}"
-            except Exception as e:
-                logger.error(f"Error during Gemini API call: {e}", exc_info=True)
-                filtered_text_content = f"LLM API 호출 중 알 수 없는 오류: {str(e)}"
+    #     except Exception as e_llm:
+    #         logger.error(f"Error during LLM processing for {raw_text_file_name}: {e_llm}", exc_info=True)
+    #         return {
+    #             "is_job_posting": False,
+    #             "filtered_content_json": None,
+    #             "error": f"LLM processing error: {str(e_llm)}"
+    #         }
 
-        if not filtered_text_content or filtered_text_content.isspace():
-            logger.warning(f"LLM filtering resulted in empty or whitespace content for {raw_text_file_name} (after potential API call). Using a placeholder.")
-            filtered_text_content = "LLM 필터링 결과 내용이 비어있거나 공백임"
-
-        logger.debug(f"LLM filtered text (first 200 chars): {filtered_text_content[:200]}")
-        
-        with open(llm_filtered_file_path, "w", encoding="utf-8") as f:
-            f.write(filtered_text_content)
-        
-        logger.info(f"Successfully filtered text using LLM and saved to '{llm_filtered_file_name}'.")
-        
-        return llm_filtered_file_name
-
-    except FileNotFoundError:
-        raise
-    except ValueError as ve: # API 키 관련 오류
-        logger.error(f"ValueError in LLM filtering for {raw_text_file_name}: {ve}", exc_info=True)
-        raise
-    except Exception as e:
-        error_msg = f"Failed to filter text with LLM for file {raw_text_file_name}: {e}"
-        logger.error(error_msg, exc_info=True)
-        # 실패 시 부분적으로 생성된 파일이 있다면 삭제 시도
-        if llm_filtered_file_name and os.path.exists(os.path.join(logs_dir, llm_filtered_file_name)):
-             logger.debug(f"Attempting to remove partially created LLM filtered file: {llm_filtered_file_name}")
-             try:
-                 os.remove(os.path.join(logs_dir, llm_filtered_file_name))
-             except Exception as e_del_llm:
-                 logger.error(f"Error removing partially created LLM file {llm_filtered_file_name}: {e_del_llm}")
-        raise 
+    # except Exception as e_general:
+    #     logger.error(f"General error in filter_job_posting_with_llm for {raw_text_file_name}: {e_general}", exc_info=True)
+    #     return {
+    #         "is_job_posting": False,
+    #         "filtered_content_json": None,
+    #         "error": f"General error: {str(e_general)}"
+    #     }
+    return {
+        "is_job_posting": False,
+        "filtered_content_json": None,
+        "error": "Functionality temporarily disabled."
+    } 
