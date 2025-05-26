@@ -44,7 +44,7 @@ The server employs several key technologies and methodologies, which can be grou
 | Language | Python 3.x |
 | Web Framework | FastAPI |
 | Asynchronous Tasks | Celery |
-| Task Broker/Backend | Redis |
+| Task Broker/Backend | Upstash Redis (for Cloud Run deployment and optionally for local development) / Local Redis (for local development only, if not using Upstash) |
 | Web Scraping/Automation | Playwright |
 | HTML Parsing | BeautifulSoup4 |
 | Data Handling | Pydantic (for request/response models) |
@@ -66,21 +66,30 @@ The server employs several key technologies and methodologies, which can be grou
 1. Clone the repository.
 2. Navigate to the `CVFactory_Server` directory.
 3. (Optional) Create and activate a Conda environment for the cover letter generation script:
-```bash
-conda create -n cvfactory_env python=3.10 -y
-conda activate cvfactory_env
-pip install langchain langchain-community faiss-cpu cohere python-dotenv langchain-experimental langchain-groq langchain-cohere --upgrade
-```
-4. Build and run the Docker containers:
+    ```bash
+    conda create -n cvfactory_env python=3.10 -y
+    conda activate cvfactory_env
+    pip install langchain langchain-community faiss-cpu cohere python-dotenv langchain-experimental langchain-groq langchain-cohere --upgrade
+    ```
+4. Environment Setup for Redis:
+    *   For Cloud Run (Production/Staging): The application is configured to use Upstash Redis. Connection details (`UPSTASH_REDIS_ENDPOINT`, `UPSTASH_REDIS_PORT`) are set as environment variables in `cloudbuild.yaml`, and the password (`UPSTASH_REDIS_PASSWORD`) is injected via Google Secret Manager.
+    *   For Local Development:
+        *   Option 1 (Recommended for consistency): Use Upstash Redis.
+            Set the following environment variables in your local shell or a `.env` file (create one in the `CVFactory_Server` root if it doesn't exist):
+            ```env
+            UPSTASH_REDIS_ENDPOINT="your_upstash_endpoint.upstash.io"
+            UPSTASH_REDIS_PORT="your_upstash_port"
+            UPSTASH_REDIS_PASSWORD="your_upstash_password"
+            ```
+            The `celery_app.py` will automatically use these if set.
+        *   Option 2: Use Local Redis.
+            If you prefer to use a local Redis instance (e.g., started via `docker run -d -p 6379:6379 redis`), ensure no Upstash environment variables are set, or set `REDIS_URL="redis://localhost:6379/0"`. The `docker-compose.yml` no longer manages a local Redis service.
 
-```bash
-docker-compose up --build
-```
-
-This command builds the Docker image (installing Python dependencies and Playwright browsers as defined in the `Dockerfile`) and then starts three services:
-- `redis`: The Redis server for Celery.
-- `web`: The FastAPI web server, handling API requests.
-- `worker`: The Celery worker, processing background tasks.
+5. Build and run the Docker containers (for services other than a local Redis if you choose Option 2 above):
+    ```bash
+    docker-compose up --build
+    ```
+    This command builds the Docker image and starts the `web` (FastAPI) and `worker` (Celery) services. These services will connect to Redis based on the environment variables set.
 
 ## 🖥 Usage
 
@@ -115,18 +124,23 @@ Logs and extracted files will be saved to the `logs/` directory, which is mapped
 
 This project uses Google Cloud Build for its CI/CD pipeline.
 
--   **Trigger**: Automatically starts when new commits are pushed to the `develop` branch of the GitHub repository.
--   **Platform**: Google Cloud Build.
--   **Configuration**: Build and deployment steps are defined in the `cloudbuild.yaml` file located in the root of the repository.
--   **Key Steps**:
-    1.  **Build Docker Image**: Builds the application's Docker image based on the `Dockerfile`.
-    2.  **Push to Artifact Registry**: Pushes the built image to Google Artifact Registry at `asia-northeast3-docker.pkg.dev/cvfactory-456014/cvfactory/cvfactory-server`.
-    3.  **Deploy to Cloud Run**: Deploys the new image to the `cvfactory-server` service on Google Cloud Run in the `asia-northeast3` region.
-    4.  **Resource Configuration**: Applies specific CPU, memory, and instance count settings during deployment.
-    5.  **Environment Variables**: Sets environment variables such as `PYTHONUNBUFFERED=1` and `REDIS_URL=redis://localhost:6379/0`.
-    6.  **Secrets Management**: Securely injects sensitive data like `GROQ_API_KEY` and `COHERE_API_KEY` as environment variables using Google Secret Manager.
-    7.  **Service Account**: The pipeline utilizes a dedicated user-managed service account (`cvfactory-builder-sa@cvfactory-456014.iam.gserviceaccount.com`) with least-privilege permissions for enhanced security.
-    8.  **Logging**: All build and application logs are configured to be sent to Cloud Logging for centralized monitoring, as defined by `logging: CLOUD_LOGGING_ONLY` in `cloudbuild.yaml`.
+-   Trigger: Automatically starts when new commits are pushed to the `develop` branch of the GitHub repository.
+-   Platform: Google Cloud Build.
+-   Configuration: Build and deployment steps are defined in the `cloudbuild.yaml` file.
+-   Key Steps:
+    1.  Build Docker Image: Builds the application's Docker image.
+    2.  Push to Artifact Registry: Pushes the built image to Google Artifact Registry.
+    3.  Deploy to Cloud Run: Deploys the new image to the `cvfactory-server` service on Google Cloud Run.
+    4.  Resource Configuration: Applies specific CPU, memory, and instance count settings.
+    5.  Environment Variables (Cloud Run):
+        *   `PYTHONUNBUFFERED=1`
+        *   `UPSTASH_REDIS_ENDPOINT`: Your Upstash Redis endpoint (e.g., `gusc1-inviting-kit-31726.upstash.io`)
+        *   `UPSTASH_REDIS_PORT`: Your Upstash Redis port (e.g., `31726`)
+    6.  Secrets Management (Cloud Run): Securely injects sensitive data as environment variables using Google Secret Manager:
+        *   `GROQ_API_KEY`
+        *   `COHERE_API_KEY`
+        *   `UPSTASH_REDIS_PASSWORD` (The password for your Upstash Redis instance)
+    7.  Service Account: Utilizes a dedicated service account with least-privilege permissions.
 
 ## 📁 Project Structure
 
@@ -135,12 +149,12 @@ This project uses Google Cloud Build for its CI/CD pipeline.
 ├── main.py           # FastAPI application entry point and API endpoints
 ├── celery_app.py     # Celery application instance configuration
 ├── celery_tasks.py   # Definitions of Celery background tasks (web scraping, parsing, formatting, etc.)
-├── Dockerfile        # Defines the Docker image for web and worker services (includes dependencies, Redis, Supervisor, and Playwright setup)
-├── docker-compose.yml# Defines and configures the multi-container Docker application for local development (web, worker, redis)
+├── Dockerfile        # Defines the Docker image for web and worker services (includes dependencies, Supervisor, and Playwright setup; local Redis server installation removed)
+├── docker-compose.yml# Defines and configures the multi-container Docker application for local development (web, worker services; local Redis service definition removed)
 ├── requirements.txt  # Lists Python dependencies required by the project
-├── entrypoint.sh     # Script executed inside the Docker container to start services (FastAPI, Celery, Redis) via Supervisor, or individual services.
-├── supervisord.conf  # Supervisor configuration file to manage FastAPI (Uvicorn), Celery worker, and Redis server processes within a single container for Cloud Run.
-├── cloudbuild.yaml   # Google Cloud Build configuration file for CI/CD (build, push to Artifact Registry, deploy to Cloud Run).
+├── entrypoint.sh     # Script executed inside the Docker container to start services (FastAPI, Celery) via Supervisor.
+├── supervisord.conf  # Supervisor configuration file to manage FastAPI (Uvicorn) and Celery worker processes (Redis server program removed).
+├── cloudbuild.yaml   # Google Cloud Build configuration file for CI/CD.
 ├── generate_cover_letter_semantic.py # Script for generating cover letters using RAG and Groq API
 ├── logs/             # Directory for local application logs and generated files (mounted as a volume in local Docker Compose setup). In Cloud Run, logs are directed to Cloud Logging.
 ├── LICENSE           # License file (CC BY NC 4.0)

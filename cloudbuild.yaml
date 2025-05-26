@@ -21,8 +21,8 @@ steps:
         --memory 2Gi \
         --min-instances 0 \
         --max-instances 1 \
-        --set-env-vars="PYTHONUNBUFFERED=1,REDIS_URL=redis://localhost:6379/0" \
-        --update-secrets=GROQ_API_KEY=GROQ_API_KEY:latest,COHERE_API_KEY=COHERE_API_KEY:latest # GROQ_API_KEY와 COHERE_API_KEY 시크릿 사용
+        --set-env-vars="PYTHONUNBUFFERED=1,UPSTASH_REDIS_ENDPOINT=gusc1-inviting-kit-31726.upstash.io,UPSTASH_REDIS_PORT=31726" \
+        --update-secrets=GROQ_API_KEY=GROQ_API_KEY:latest,COHERE_API_KEY=COHERE_API_KEY:latest,UPSTASH_REDIS_PASSWORD=UPSTASH_REDIS_PASSWORD:latest
 images:
 - 'asia-northeast3-docker.pkg.dev/$PROJECT_ID/cvfactory/cvfactory-server:latest'
 options:

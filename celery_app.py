@@ -4,19 +4,36 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Redis URL 환경 변수 ( Memorystore for Redis 사용 시 해당 인스턴스 IP, 포트 등으로 설정)
-# 예: redis://<REDIS_HOST>:<REDIS_PORT>/0
-# 로컬 테스트 시: redis://localhost:6379/0
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-logger.info(f"Celery: REDIS_URL='{REDIS_URL}'")
+# Upstash Redis 연결 정보 환경 변수
+UPSTASH_REDIS_ENDPOINT = os.environ.get('UPSTASH_REDIS_ENDPOINT', 'gusc1-inviting-kit-31726.upstash.io')
+UPSTASH_REDIS_PORT = os.environ.get('UPSTASH_REDIS_PORT', '31726')
+UPSTASH_REDIS_PASSWORD = os.environ.get('UPSTASH_REDIS_PASSWORD') # 실제 비밀번호는 Secret Manager 또는 환경변수로 주입
+
+# 로컬 테스트 시 REDIS_URL 환경 변수 또는 직접 Upstash 정보 사용 가능
+# 예: REDIS_URL = "rediss://default:YOUR_PASSWORD@YOUR_UPSTASH_ENDPOINT:YOUR_UPSTASH_PORT"
+LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+
+if UPSTASH_REDIS_PASSWORD and UPSTASH_REDIS_ENDPOINT and UPSTASH_REDIS_PORT:
+    # Cloud Run 환경 또는 Upstash 정보가 모두 제공된 경우
+    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}"
+    logger.info("Using Upstash Redis for Celery.")
+else:
+    # 로컬 환경 또는 Upstash 정보가 불완전한 경우 (기존 로컬 Redis 또는 REDIS_URL 사용)
+    FINAL_REDIS_URL = LOCAL_REDIS_URL
+    logger.info("Using local Redis or REDIS_URL for Celery.")
+    if not UPSTASH_REDIS_PASSWORD:
+        logger.warning("UPSTASH_REDIS_PASSWORD not set. Falling back to local Redis or REDIS_URL.")
+
+logger.info(f"Celery: FINAL_REDIS_URL (host and port only for logging): {'rediss://' + UPSTASH_REDIS_ENDPOINT + ':' + UPSTASH_REDIS_PORT if UPSTASH_REDIS_PASSWORD else FINAL_REDIS_URL.split('@')[-1]}")
 
 
 try:
     celery_app = Celery(
-        'tasks', # 현재 모듈의 이름 또는 임의의 이름 (유지하거나 celery_tasks로 변경 가능)
-        broker=REDIS_URL,
-        backend=REDIS_URL,
-        include=['celery_tasks']  # 작업 함수가 포함된 모듈을 celery_tasks.py로 변경
+        'tasks',
+        broker=FINAL_REDIS_URL,
+        backend=FINAL_REDIS_URL,
+        include=['celery_tasks'],
+        broker_connection_retry_on_startup=True # GCP Cloud Run 환경에서 시작시 네트워크 연결 재시도
     )
     logger.info("Celery app instance created successfully.")
 except Exception as e:
@@ -24,6 +41,12 @@ except Exception as e:
     raise
 
 # 선택적 Celery 설정 (필요에 따라 추가)
+# Redis SSL 설정 추가
+if FINAL_REDIS_URL.startswith("rediss://"):
+    celery_app.conf.broker_use_ssl = {'ssl_cert_reqs': 'CERT_NONE'} # Upstash는 자체 서명된 인증서가 아니므로 CERT_NONE 또는 CERT_OPTIONAL 사용 가능
+    celery_app.conf.redis_backend_use_ssl = {'ssl_cert_reqs': 'CERT_NONE'}
+    logger.info("Celery SSL/TLS enabled for Upstash Redis.")
+
 celery_app.conf.update(
     task_serializer='json',
     accept_content=['json'],  # 허용할 콘텐츠 타입

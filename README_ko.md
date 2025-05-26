@@ -44,7 +44,7 @@
 | 언어 | Python 3.x |
 | 웹 프레임워크 | FastAPI |
 | 비동기 태스크 | Celery |
-| 태스크 브로커/백엔드 | Redis |
+| 태스크 브로커/백엔드 | Upstash Redis (Cloud Run 배포 및 로컬 개발 시 선택적 사용) / 로컬 Redis (Upstash를 사용하지 않는 로컬 개발 전용) |
 | 웹 스크래핑/자동화 | Playwright |
 | HTML 파싱 | BeautifulSoup4 |
 | 데이터 처리 | Pydantic (요청/응답 모델용) |
@@ -63,24 +63,33 @@
 
 ### 설치 방법
 
-1. 저장소를 클론합니다.
-2. `CVFactory_Server` 디렉토리로 이동합니다.
-3. (선택 사항) 자기소개서 생성 스크립트 실행을 위한 Conda 환경을 생성하고 활성화합니다:
-```bash
-conda create -n cvfactory_env python=3.10 -y
-conda activate cvfactory_env
-pip install langchain langchain-community faiss-cpu cohere python-dotenv langchain-experimental langchain-groq langchain-cohere --upgrade
-```
-4. Docker Compose를 사용하여 Docker 컨테이너를 빌드하고 실행합니다:
+1.  저장소를 클론합니다.
+2.  `CVFactory_Server` 디렉토리로 이동합니다.
+3.  (선택 사항) 자기소개서 생성 스크립트 실행을 위한 Conda 환경을 생성하고 활성화합니다:
+    ```bash
+    conda create -n cvfactory_env python=3.10 -y
+    conda activate cvfactory_env
+    pip install langchain langchain-community faiss-cpu cohere python-dotenv langchain-experimental langchain-groq langchain-cohere --upgrade
+    ```
+4.  Redis 환경 설정:
+    *   Cloud Run (프로덕션/스테이징 환경): 애플리케이션은 Upstash Redis를 사용하도록 설정되어 있습니다. 연결 정보(`UPSTASH_REDIS_ENDPOINT`, `UPSTASH_REDIS_PORT`)는 `cloudbuild.yaml` 파일에 환경 변수로 설정되며, 비밀번호(`UPSTASH_REDIS_PASSWORD`)는 Google Secret Manager를 통해 주입됩니다.
+    *   로컬 개발 환경:
+        *   옵션 1 (일관성을 위해 권장): Upstash Redis 사용.
+            로컬 셸 또는 `.env` 파일( `CVFactory_Server` 루트에 없다면 생성)에 다음 환경 변수를 설정합니다:
+            ```env
+            UPSTASH_REDIS_ENDPOINT="your_upstash_endpoint.upstash.io"
+            UPSTASH_REDIS_PORT="your_upstash_port"
+            UPSTASH_REDIS_PASSWORD="your_upstash_password"
+            ```
+            이 변수들이 설정되면 `celery_app.py`가 자동으로 사용합니다.
+        *   옵션 2: 로컬 Redis 사용.
+            로컬 Redis 인스턴스(예: `docker run -d -p 6379:6379 redis`로 시작) 사용을 선호하는 경우, Upstash 관련 환경 변수를 설정하지 않거나 `REDIS_URL="redis://localhost:6379/0"`으로 설정합니다. `docker-compose.yml` 파일은 더 이상 로컬 Redis 서비스를 관리하지 않습니다.
 
-```bash
-docker-compose up --build
-```
-
-이 명령어는 Docker 이미지를 빌드하고(`Dockerfile`에 정의된 Python 종속성 및 Playwright 브라우저 설치 포함), 다음 세 가지 서비스를 시작합니다:
-- `redis`: Celery를 위한 Redis 서버.
-- `web`: FastAPI 웹 서버, API 요청 처리.
-- `worker`: Celery 워커, 백그라운드 태스크 처리.
+5.  Docker 컨테이너를 빌드하고 실행합니다 (위의 로컬 Redis 옵션 2를 선택한 경우 로컬 Redis 서비스 제외):
+    ```bash
+    docker-compose up --build
+    ```
+    이 명령어는 Docker 이미지를 빌드하고 `web`(FastAPI) 및 `worker`(Celery) 서비스를 시작합니다. 이 서비스들은 설정된 환경 변수에 따라 Redis에 연결됩니다.
 
 ## 🖥 사용법
 
@@ -107,18 +116,23 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
 
 이 프로젝트는 CI/CD 파이프라인을 위해 Google Cloud Build를 사용합니다.
 
--   **트리거**: GitHub 저장소의 `develop` 브랜치에 새로운 커밋이 푸시될 때 자동으로 시작됩니다.
--   **플랫폼**: Google Cloud Build.
--   **설정**: 빌드 및 배포 단계는 저장소 루트에 위치한 `cloudbuild.yaml` 파일에 정의되어 있습니다.
--   **주요 단계**:
-    1.  **Docker 이미지 빌드**: `Dockerfile`을 기반으로 애플리케이션의 Docker 이미지를 빌드합니다.
-    2.  **Artifact Registry에 푸시**: 빌드된 이미지를 Google Artifact Registry (`asia-northeast3-docker.pkg.dev/cvfactory-456014/cvfactory/cvfactory-server`)에 푸시합니다.
-    3.  **Cloud Run에 배포**: 새 이미지를 `asia-northeast3` 리전의 Google Cloud Run (`cvfactory-server` 서비스)에 배포합니다.
-    4.  **리소스 설정**: 배포 시 특정 CPU, 메모리 및 인스턴스 수 설정을 적용합니다.
-    5.  **환경 변수**: `PYTHONUNBUFFERED=1`, `REDIS_URL=redis://localhost:6379/0` 와 같은 환경 변수를 설정합니다.
-    6.  **보안 비밀 관리**: `GROQ_API_KEY`, `COHERE_API_KEY`와 같은 민감한 데이터를 Google Secret Manager를 사용하여 환경 변수로 안전하게 주입합니다.
-    7.  **서비스 계정**: 파이프라인은 향상된 보안을 위해 최소 권한 원칙에 따라 전용 사용자 관리형 서비스 계정 (`cvfactory-builder-sa@cvfactory-456014.iam.gserviceaccount.com`)을 활용합니다.
-    8.  **로깅**: 모든 빌드 및 애플리케이션 로그는 `cloudbuild.yaml`의 `logging: CLOUD_LOGGING_ONLY` 설정에 따라 중앙 집중식 모니터링을 위해 Cloud Logging으로 전송되도록 구성됩니다.
+-   트리거: GitHub 저장소의 `develop` 브랜치에 새로운 커밋이 푸시될 때 자동으로 시작됩니다.
+-   플랫폼: Google Cloud Build.
+-   설정: 빌드 및 배포 단계는 `cloudbuild.yaml` 파일에 정의되어 있습니다.
+-   주요 단계:
+    1.  Docker 이미지 빌드: 애플리케이션의 Docker 이미지를 빌드합니다.
+    2.  Artifact Registry에 푸시: 빌드된 이미지를 Google Artifact Registry에 푸시합니다.
+    3.  Cloud Run에 배포: 새 이미지를 Google Cloud Run의 `cvfactory-server` 서비스에 배포합니다.
+    4.  리소스 설정: 특정 CPU, 메모리 및 인스턴스 수 설정을 적용합니다.
+    5.  환경 변수 (Cloud Run):
+        *   `PYTHONUNBUFFERED=1`
+        *   `UPSTASH_REDIS_ENDPOINT`: 사용자의 Upstash Redis 엔드포인트 (예: `gusc1-inviting-kit-31726.upstash.io`)
+        *   `UPSTASH_REDIS_PORT`: 사용자의 Upstash Redis 포트 (예: `31726`)
+    6.  보안 비밀 관리 (Cloud Run): 다음과 같은 민감한 데이터를 Google Secret Manager를 사용하여 환경 변수로 안전하게 주입합니다:
+        *   `GROQ_API_KEY`
+        *   `COHERE_API_KEY`
+        *   `UPSTASH_REDIS_PASSWORD` (Upstash Redis 인스턴스의 비밀번호)
+    7.  서비스 계정: 최소 권한 원칙에 따른 전용 서비스 계정을 활용합니다.
 
 ## 📁 프로젝트 구조
 
@@ -127,12 +141,12 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
 ├── main.py           # FastAPI 애플리케이션 진입점 및 API 엔드포인트
 ├── celery_app.py     # Celery 애플리케이션 인스턴스 설정
 ├── celery_tasks.py   # Celery 백그라운드 작업 정의 (웹 스크레이핑, 파싱, 포맷팅 등)
-├── Dockerfile        # 웹 및 워커 서비스를 위한 Docker 이미지 정의 (의존성, Redis, Supervisor, Playwright 설정 포함)
-├── docker-compose.yml# 로컬 개발을 위한 멀티 컨테이너 Docker 애플리케이션 정의 및 설정 (web, worker, redis)
+├── Dockerfile        # 웹 및 워커 서비스를 위한 Docker 이미지 정의 (의존성, Supervisor, Playwright 설정 포함; 로컬 Redis 서버 설치 제거됨)
+├── docker-compose.yml# 로컬 개발을 위한 멀티 컨테이너 Docker 애플리케이션 정의 및 설정 (web, worker 서비스; 로컬 Redis 서비스 정의 제거됨)
 ├── requirements.txt  # 프로젝트에 필요한 Python 의존성 목록
-├── entrypoint.sh     # Docker 컨테이너 내부에서 Supervisor를 통해 서비스(FastAPI, Celery, Redis)를 시작하거나 개별 서비스를 시작하는 스크립트
-├── supervisord.conf  # Cloud Run을 위한 단일 컨테이너 내에서 FastAPI(Uvicorn), Celery 워커, Redis 서버 프로세스를 관리하는 Supervisor 설정 파일
-├── cloudbuild.yaml   # CI/CD를 위한 Google Cloud Build 설정 파일 (빌드, Artifact Registry에 푸시, Cloud Run에 배포)
+├── entrypoint.sh     # Docker 컨테이너 내부에서 Supervisor를 통해 서비스(FastAPI, Celery)를 시작하는 스크립트
+├── supervisord.conf  # FastAPI(Uvicorn) 및 Celery 워커 프로세스를 관리하는 Supervisor 설정 파일 (Redis 서버 프로그램 제거됨)
+├── cloudbuild.yaml   # CI/CD를 위한 Google Cloud Build 설정 파일
 ├── generate_cover_letter_semantic.py # RAG 및 Groq API를 사용하여 자기소개서를 생성하는 스크립트
 ├── logs/             # 로컬 애플리케이션 로그 및 생성된 파일 디렉토리 (로컬 Docker Compose 설정에서 볼륨으로 마운트됨). Cloud Run에서는 로그가 Cloud Logging으로 전송됩니다.
 ├── LICENSE           # 라이선스 파일 (CC BY NC 4.0)

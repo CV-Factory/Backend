@@ -12,13 +12,13 @@ ENV PORT 8080
 
 WORKDIR $APP_HOME
 
-# 시스템 종속성 설치 (Playwright 브라우저 실행에 필요) 및 Redis, Supervisor 설치
+# 시스템 종속성 설치 (Playwright 브라우저 실행에 필요) 및 Supervisor 설치
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
     libpango-1.0-0 libcairo2 \
-    redis-server supervisor curl && \
+    supervisor curl && \
     rm -rf /var/lib/apt/lists/*
 
 # requirements.txt 복사 및 패키지 설치

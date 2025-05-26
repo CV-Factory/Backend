@@ -1,43 +1,22 @@
 version: '3.8'
 
 services:
-  redis:
-    image: "redis:latest"
-    container_name: my-redis
-    ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes
-    volumes:
-      - redisdata:/data
-    restart: always
-
   web:
     build: .
-    container_name: cvfactory_web
     ports:
-      - "8001:8080"
-    environment:
-      REDIS_URL: redis://redis:6379/0
-    entrypoint: ["/app/entrypoint.sh", "web"]
+      - "8001:8000"
     volumes:
-      - .:/app
-    depends_on:
-      - redis
-    restart: always
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["./entrypoint.sh", "web"]
 
   worker:
     build: .
-    container_name: cvfactory_worker
-    environment:
-      REDIS_URL: redis://redis:6379/0
-    entrypoint: ["/app/entrypoint.sh", "worker"]
     volumes:
-      - .:/app
-    depends_on:
-      - redis
-    restart: always
-    tty: true
-    stdin_open: true
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["./entrypoint.sh", "worker"]
 
-volumes:
-  redisdata: 
+volumes: 
