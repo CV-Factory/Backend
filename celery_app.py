@@ -42,10 +42,10 @@ except Exception as e:
 
 # 선택적 Celery 설정 (필요에 따라 추가)
 # Redis SSL 설정 추가
-# if FINAL_REDIS_URL.startswith("rediss://"):
-#     celery_app.conf.broker_use_ssl = {'ssl_cert_reqs': 'CERT_NONE'} # Upstash는 자체 서명된 인증서가 아니므로 CERT_NONE 또는 CERT_OPTIONAL 사용 가능
-#     celery_app.conf.redis_backend_use_ssl = {'ssl_cert_reqs': 'CERT_NONE'}
-#     logger.info("Celery SSL/TLS enabled for Upstash Redis.")
+if FINAL_REDIS_URL.startswith("rediss://"):
+    celery_app.conf.broker_use_ssl = {'ssl_cert_reqs': 'CERT_NONE'} # Upstash는 자체 서명된 인증서가 아니므로 CERT_NONE 또는 CERT_OPTIONAL 사용 가능
+    celery_app.conf.redis_backend_use_ssl = {'ssl_cert_reqs': 'CERT_NONE'}
+    logger.info("Celery SSL/TLS enabled for Upstash Redis with CERT_NONE.")
 
 celery_app.conf.update(
     task_serializer='json',
