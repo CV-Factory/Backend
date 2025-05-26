@@ -208,7 +208,7 @@ def extract_body_html_from_url(url: str):
             try:
                 page = browser.new_page()
                 logger.info(f"New page created. Navigating to URL: {url}")
-                page.goto(url, timeout=90000, wait_until='domcontentloaded') 
+                page.goto(url, timeout=180000, wait_until='domcontentloaded')
                 logger.info(f"Successfully navigated to URL: {url}")
 
                 logger.info(f"Starting to flatten iframes for URL: {url}")
