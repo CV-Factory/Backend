@@ -572,129 +572,32 @@ def extract_text_from_html_file(html_file_name: str):
 
 @celery_app.task(name='celery_tasks.filter_job_posting_with_llm')
 def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name은 이제 순수 파일명
-    logger.warning("filter_job_posting_with_llm is temporarily disabled and will not process the file.")
-    return {
-        "is_job_posting": False,
-        "filtered_content_json": None,
-        "error": "Functionality temporarily disabled."
-    }
-    # 기존 함수 내용은 이 아래에 그대로 둡니다 (실행되지 않음)
-    logger.info("Attempting to filter job posting with LLM.")
-    logger.info(f"Current GEMINI_API_KEY from env: {os.getenv('GEMINI_API_KEY')}")
-    logger.info(f"Current COHERE_API_KEY from env: {os.getenv('COHERE_API_KEY')}")
-    # 로드된 .env 또는 환경 변수에서 API 키 가져오기
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    cohere_api_key = os.getenv("COHERE_API_KEY") # Cohere API 키도 로깅 및 확인
-
-    if not gemini_api_key:
-        logger.error("CRITICAL: GEMINI_API_KEY is NOT SET in the Celery task environment!")
-        raise ValueError("GEMINI_API_KEY is not set.")
+    logger.warning(f"filter_job_posting_with_llm is temporarily disabled for file: {raw_text_file_name} and will return a placeholder.")
     
-    if not cohere_api_key: # Cohere API 키도 확인
-        logger.error("CRITICAL: COHERE_API_KEY is NOT SET in the Celery task environment!")
-        # 일단 경고만 하고 진행하거나, 필요에 따라 여기서도 raise ValueError 가능
-        logger.warning("COHERE_API_KEY is not set. Some functionalities depending on Cohere might fail.")
-
-
+    logs_dir = "logs"  # Ensure logs_dir is defined
     # 현재 날짜와 시간을 포함하는 파일명 생성 (YYYYMMDD_HHMMSS_originalfile.txt 형식)
     current_date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base_name_without_ext = os.path.splitext(raw_text_file_name)[0]
-    # "text_content_from_html_" 프리픽스가 있다면 제거, 없다면 그대로 사용
     if base_name_without_ext.startswith("text_content_from_html_"):
         cleaned_base_name = base_name_without_ext.replace("text_content_from_html_", "")
     else:
-        cleaned_base_name = base_name_without_ext # 예: 날짜_고유번호 형식 그대로 사용
+        cleaned_base_name = base_name_without_ext
         
     llm_filtered_file_name = f"llm_filtered_job_posting_{cleaned_base_name}.txt"
     llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_file_name)
 
-    filtered_text_content = ""
-
+    placeholder_content = "LLM filtering is temporarily disabled. This is a placeholder."
+    
     try:
-        with open(raw_text_file_path, "r", encoding="utf-8") as f:
-            raw_text_content = f.read()
-        logger.debug(f"Successfully read raw text file: {raw_text_file_path}. Content length: {len(raw_text_content)}")
-        
-        if not raw_text_content.strip():
-            logger.warning(f"Raw text content for {raw_text_file_name} is empty or whitespace. Skipping LLM filtering.")
-            filtered_text_content = "원본 내용 없음 (LLM 필터링 건너뜀)"
-        else:
-            # API 전송 전 줄바꿈 문자를 공백으로 치환하는 로직을 제거하고 원본 텍스트를 그대로 사용합니다.
-            text_for_llm = raw_text_content
-            logger.debug(f"Raw text (first 200 chars for LLM, newlines preserved): {text_for_llm[:200]}")
-
-            genai.configure(api_key=gemini_api_key)
-            
-            generation_config_gemini = genai.types.GenerationConfig(
-                temperature=0.2,
-                top_p=0.8,
-                top_k=20,
-                max_output_tokens=8192,
-            )
-
-            try:
-                logger.info("Attempting to call Gemini API for text filtering...")
-                # 모델명을 'gemini-2.5-flash-preview-04-17'로 설정하고 try 블록 내부로 이동
-                model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
-                
-                # 프롬프트 문자열 따옴표 수정: f"""...""" 형태를 유지
-                prompt = f"""다음 텍스트에서 실제 채용 공고 내용과 직접적으로 관련된 부분만 추출해주세요.
-
-                            추출할 내용이 없다면 '추출할 내용 없음'이라고 답변해주세요.
-
-                            {text_for_llm}
-                            """
-                
-                response = model.generate_content(
-                    prompt,
-                    generation_config=generation_config_gemini,
-                )
-                
-                if response.parts:
-                    filtered_text_content = response.text
-                    logger.info(f"Successfully filtered text using Gemini API. Filtered text length: {len(filtered_text_content)}")
-                    if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
-                        logger.warning("LLM returned empty or 'no content' response.")
-                        filtered_text_content = "LLM 필터링 결과 내용 없음"
-                else:
-                    logger.warning("Gemini API response did not contain any parts (candidates).")
-                    if response.prompt_feedback:
-                        logger.warning(f"Prompt feedback from API: {response.prompt_feedback}")
-                    filtered_text_content = "LLM 응답 없음 (API 반환 내용 없음)"
-
-            except google.api_core.exceptions.InvalidArgument as e:
-                logger.error(f"Gemini API InvalidArgument error: {e}", exc_info=True)
-                filtered_text_content = f"LLM API 요청 오류 (InvalidArgument): {str(e)}"
-            except Exception as e:
-                logger.error(f"Error during Gemini API call: {e}", exc_info=True)
-                filtered_text_content = f"LLM API 호출 중 알 수 없는 오류: {str(e)}"
-
-        if not filtered_text_content or filtered_text_content.isspace():
-            logger.warning(f"LLM filtering resulted in empty or whitespace content for {raw_text_file_name} (after potential API call). Using a placeholder.")
-            filtered_text_content = "LLM 필터링 결과 내용이 비어있거나 공백임"
-
-        logger.debug(f"LLM filtered text (first 200 chars): {filtered_text_content[:200]}")
+        # Create the logs directory if it doesn't exist
+        os.makedirs(logs_dir, exist_ok=True)
         
         with open(llm_filtered_file_path, "w", encoding="utf-8") as f:
-            f.write(filtered_text_content)
-        
-        logger.info(f"Successfully filtered text using LLM and saved to '{llm_filtered_file_name}'.")
-        
+            f.write(placeholder_content)
+        logger.info(f"Placeholder content written to {llm_filtered_file_path} because LLM filtering is disabled.")
         return llm_filtered_file_name
-
-    except FileNotFoundError:
-        raise
-    except ValueError as ve: # API 키 관련 오류
-        logger.error(f"ValueError in LLM filtering for {raw_text_file_name}: {ve}", exc_info=True)
-        raise
     except Exception as e:
-        error_msg = f"Failed to filter text with LLM for file {raw_text_file_name}: {e}"
+        error_msg = f"Failed to write placeholder LLM filtered file for {raw_text_file_name}: {e}"
         logger.error(error_msg, exc_info=True)
-        # 실패 시 부분적으로 생성된 파일이 있다면 삭제 시도
-        if llm_filtered_file_name and os.path.exists(os.path.join(logs_dir, llm_filtered_file_name)):
-             logger.debug(f"Attempting to remove partially created LLM filtered file: {llm_filtered_file_name}")
-             try:
-                 os.remove(os.path.join(logs_dir, llm_filtered_file_name))
-             except Exception as e_del_llm:
-                 logger.error(f"Error removing partially created LLM file {llm_filtered_file_name}: {e_del_llm}")
-        raise 
+        logger.warning(f"Returning intended filename {llm_filtered_file_name} despite write error, for task chaining consistency.")
+        return llm_filtered_file_name 
