@@ -18,7 +18,7 @@ steps:
         --allow-unauthenticated \
         --port 8000 \
         --cpu 1 \
-        --memory 1Gi \
+        --memory 2Gi \
         --min-instances 0 \
         --max-instances 1 \
         --set-env-vars="PYTHONUNBUFFERED=1,REDIS_URL=redis://localhost:6379/0" \
