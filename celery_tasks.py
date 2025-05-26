@@ -12,6 +12,9 @@ import uuid
 from celery.exceptions import MaxRetriesExceededError
 from dotenv import load_dotenv
 import datetime # datetime 모듈 추가
+from langchain_groq import ChatGroq # Groq import 추가
+from langchain_core.prompts import ChatPromptTemplate # Langchain Prompt 추가
+from langchain_core.output_parsers import StrOutputParser # Langchain Output Parser 추가
 
 # 전역 로깅 레벨 및 라이브러리 로깅 레벨 조정
 logging.basicConfig(level=logging.INFO)
@@ -572,32 +575,135 @@ def extract_text_from_html_file(html_file_name: str):
 
 @celery_app.task(name='celery_tasks.filter_job_posting_with_llm')
 def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name은 이제 순수 파일명
-    logger.warning(f"filter_job_posting_with_llm is temporarily disabled for file: {raw_text_file_name} and will return a placeholder.")
+    logger.info(f"Attempting to filter job posting with Groq LLM for file: {raw_text_file_name}")
     
-    logs_dir = "logs"  # Ensure logs_dir is defined
-    # 현재 날짜와 시간을 포함하는 파일명 생성 (YYYYMMDD_HHMMSS_originalfile.txt 형식)
+    logs_dir = "logs"
+    raw_text_file_path = os.path.join(logs_dir, raw_text_file_name)
+
+    # 파일명 생성 로직 (기존과 유사하게)
     current_date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base_name_without_ext = os.path.splitext(raw_text_file_name)[0]
     if base_name_without_ext.startswith("text_content_from_html_"):
         cleaned_base_name = base_name_without_ext.replace("text_content_from_html_", "")
     else:
         cleaned_base_name = base_name_without_ext
-        
-    llm_filtered_file_name = f"llm_filtered_job_posting_{cleaned_base_name}.txt"
+    llm_filtered_file_name = f"llm_filtered_job_posting_{cleaned_base_name}_{current_date_str}.txt" # 파일명에 타임스탬프 추가하여 고유성 강화
     llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_file_name)
 
-    placeholder_content = "LLM filtering is temporarily disabled. This is a placeholder."
-    
+    filtered_text_content = ""
+
     try:
-        # Create the logs directory if it doesn't exist
-        os.makedirs(logs_dir, exist_ok=True)
+        logger.info(f"Reading raw text file: {raw_text_file_path}")
+        if not os.path.exists(raw_text_file_path):
+            logger.error(f"Raw text file not found: {raw_text_file_path}")
+            raise FileNotFoundError(f"Raw text file not found: {raw_text_file_path}")
         
+        with open(raw_text_file_path, "r", encoding="utf-8") as f:
+            raw_text_content = f.read()
+        logger.info(f"Successfully read raw text file: {raw_text_file_path}. Content length: {len(raw_text_content)}")
+        
+        if not raw_text_content.strip():
+            logger.warning(f"Raw text content for {raw_text_file_name} is empty or whitespace. Skipping LLM filtering.")
+            filtered_text_content = "원본 내용 없음 (LLM 필터링 건너뜀)"
+        else:
+            groq_api_key = os.getenv("GROQ_API_KEY")
+            if not groq_api_key:
+                logger.error("CRITICAL: GROQ_API_KEY is NOT SET in the Celery task environment!")
+                # API 키가 없으면 플레이스홀더 대신 에러를 발생시키거나, 정해진 값을 반환할 수 있습니다.
+                # 여기서는 이전처럼 플레이스홀더를 기록하고 반환합니다.
+                placeholder_content = "GROQ_API_KEY not configured. LLM filtering skipped."
+                with open(llm_filtered_file_path, "w", encoding="utf-8") as f:
+                    f.write(placeholder_content)
+                logger.info(f"Placeholder content written to {llm_filtered_file_path} due to missing GROQ_API_KEY.")
+                return llm_filtered_file_name
+
+            try:
+                logger.info("Initializing Groq Chat LLM (meta-llama/llama-4-maverick-17b-128e-instruct)...")
+                # 모델명을 정확히 명시합니다. Langchain 문서 또는 Groq API 문서를 참조하여 사용 가능한 모델명을 확인하세요.
+                # 요청하신 모델명 "meta-llama/llama-4-maverick-17b-128e-instruct" 그대로 사용합니다.
+                # 실제 Groq에서 이 모델명을 지원하는지 확인이 필요합니다. (예시로 llama3-8b-8192 등)
+                # 우선은 요청하신 모델명으로 설정합니다.
+                model = ChatGroq(
+                    temperature=0.1, # 채용공고 추출 작업이므로 낮은 온도로 설정
+                    groq_api_key=groq_api_key,
+                    model_name="meta-llama/llama-4-maverick-17b-128e-instruct", 
+                    max_tokens=8000 # 필요시 조정
+                )
+                logger.info("Groq Chat LLM initialized successfully.")
+
+                prompt_template_str = """You are an expert assistant that extracts only the core job posting content from the given text. 
+Your goal is to identify and isolate the actual job advertisement.
+Carefully review the entire text provided.
+Extract ONLY the following sections if present:
+- Job Title
+- Company Name (if clearly part of the posting)
+- Job Description / Responsibilities
+- Qualifications / Requirements (skills, experience, education)
+- Preferred Qualifications (if any)
+- What the company offers / Benefits (if specifically listed for the job)
+- Location
+- How to Apply (if mentioned as part of the posting itself, not general site instructions)
+
+IGNORE everything else, including but not limited to:
+- Website navigation elements (menus, links, headers, footers)
+- Advertisements for other jobs or services
+- Cookie consent banners
+- General company promotional text not tied to this specific job
+- User comments or discussions
+- Irrelevant metadata or timestamps
+
+If the text does not appear to contain a job posting, or if the content is too garbled to be a job posting, respond with the exact phrase '추출할 내용 없음' and nothing else.
+Do not add any introductory phrases like "Here is the job posting content:" or any explanations. Just provide the extracted text or '추출할 내용 없음'.
+
+Here is the text to analyze:
+{text_input}
+"""
+                
+                prompt = ChatPromptTemplate.from_template(prompt_template_str)
+                
+                output_parser = StrOutputParser()
+                
+                chain = prompt | model | output_parser
+                
+                logger.info(f"Invoking Groq LLM chain for file: {raw_text_file_name}...")
+                # text_for_llm = raw_text_content # 원본 텍스트 그대로 사용
+                filtered_text_content = chain.invoke({"text_input": raw_text_content})
+                logger.info(f"Groq LLM chain invocation complete. Raw output length: {len(filtered_text_content)}")
+
+                if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
+                    logger.warning("LLM returned empty or '추출할 내용 없음' response.")
+                    filtered_text_content = "LLM 필터링 결과 내용 없음" # 일관된 메시지로 변경
+                else:
+                    logger.info("Successfully filtered text using Groq LLM.")
+                    # 결과가 너무 길 경우를 대비한 로깅 (앞부분만)
+                    logger.debug(f"Filtered text (first 300 chars): {filtered_text_content[:300]}")
+
+            except Exception as e_groq:
+                logger.error(f"Error during Groq LLM call for {raw_text_file_name}: {e_groq}", exc_info=True)
+                filtered_text_content = f"LLM API 호출 중 오류 발생: {str(e_groq)}"
+                # 오류 발생 시에도 파일은 생성하되, 오류 내용을 기록
+        
+        # 최종 필터링된 내용을 파일에 저장
+        logger.info(f"Writing filtered content to: {llm_filtered_file_path}")
         with open(llm_filtered_file_path, "w", encoding="utf-8") as f:
-            f.write(placeholder_content)
-        logger.info(f"Placeholder content written to {llm_filtered_file_path} because LLM filtering is disabled.")
+            f.write(filtered_text_content)
+        logger.info(f"Successfully saved filtered text to '{llm_filtered_file_name}'.")
+        
         return llm_filtered_file_name
-    except Exception as e:
-        error_msg = f"Failed to write placeholder LLM filtered file for {raw_text_file_name}: {e}"
-        logger.error(error_msg, exc_info=True)
-        logger.warning(f"Returning intended filename {llm_filtered_file_name} despite write error, for task chaining consistency.")
-        return llm_filtered_file_name 
+
+    except FileNotFoundError as e_fnf:
+        logger.error(f"FileNotFoundError in filter_job_posting_with_llm for {raw_text_file_name}: {e_fnf}", exc_info=True)
+        # 파일럿 실행 시에는 오류 발생 시에도 다음 단계로 넘어갈 수 있도록 임시 파일명을 반환하거나,
+        # 혹은 None을 반환하여 후속 작업에서 이를 처리하도록 할 수 있습니다.
+        # 여기서는 오류를 다시 발생시켜 Celery가 실패로 처리하도록 합니다.
+        raise
+    except Exception as e_general:
+        logger.error(f"An unexpected error occurred in filter_job_posting_with_llm for {raw_text_file_name}: {e_general}", exc_info=True)
+        # 예측하지 못한 오류 발생 시, 부분적으로 생성된 파일이 있다면 삭제 시도
+        if os.path.exists(llm_filtered_file_path):
+            try:
+                os.remove(llm_filtered_file_path)
+                logger.info(f"Removed partially created file due to error: {llm_filtered_file_path}")
+            except Exception as e_del:
+                logger.error(f"Error removing partially created file {llm_filtered_file_path}: {e_del}")
+        raise # 오류를 다시 발생시킴 
