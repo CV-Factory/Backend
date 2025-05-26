@@ -123,15 +123,15 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
     1.  Docker 이미지 빌드: 애플리케이션의 Docker 이미지를 빌드합니다.
     2.  Artifact Registry에 푸시: 빌드된 이미지를 Google Artifact Registry에 푸시합니다.
     3.  Cloud Run에 배포: 새 이미지를 Google Cloud Run의 `cvfactory-server` 서비스에 배포합니다.
-    4.  리소스 설정: 특정 CPU, 메모리 및 인스턴스 수 설정을 적용합니다.
+    4.  리소스 설정: 특정 CPU (1), 메모리 (2Gi) 및 인스턴스 수 (최소 0, 최대 1) 설정을 적용합니다. 서비스는 내부적으로 8000번 포트에서 수신 대기하도록 설정됩니다.
     5.  환경 변수 (Cloud Run):
         *   `PYTHONUNBUFFERED=1`
         *   `UPSTASH_REDIS_ENDPOINT`: 사용자의 Upstash Redis 엔드포인트 (예: `gusc1-inviting-kit-31726.upstash.io`)
         *   `UPSTASH_REDIS_PORT`: 사용자의 Upstash Redis 포트 (예: `31726`)
     6.  보안 비밀 관리 (Cloud Run): 다음과 같은 민감한 데이터를 Google Secret Manager를 사용하여 환경 변수로 안전하게 주입합니다:
-        *   `GROQ_API_KEY`
-        *   `COHERE_API_KEY`
-        *   `UPSTASH_REDIS_PASSWORD` (Upstash Redis 인스턴스의 비밀번호)
+        *   `GROQ_API_KEY` (최신 버전)
+        *   `COHERE_API_KEY` (최신 버전)
+        *   `UPSTASH_REDIS_PASSWORD` (Upstash Redis 인스턴스의 비밀번호, 최신 버전)
     7.  서비스 계정: 최소 권한 원칙에 따른 전용 서비스 계정을 활용합니다. 이 서비스 계정(또는 Cloud Run 서비스에 특정 서비스 계정이 설정되지 않은 경우 기본 Compute Engine 서비스 계정)에 지정된 보안 비밀에 접근하기 위한 "Secret Manager 비밀 접근자"(roles/secretmanager.secretAccessor) 역할이 부여되었는지 확인하십시오.
 
 ## 📁 프로젝트 구조

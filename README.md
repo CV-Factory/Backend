@@ -131,15 +131,15 @@ This project uses Google Cloud Build for its CI/CD pipeline.
     1.  Build Docker Image: Builds the application's Docker image.
     2.  Push to Artifact Registry: Pushes the built image to Google Artifact Registry.
     3.  Deploy to Cloud Run: Deploys the new image to the `cvfactory-server` service on Google Cloud Run.
-    4.  Resource Configuration: Applies specific CPU, memory, and instance count settings.
+    4.  Resource Configuration: Applies specific CPU (1), memory (2Gi), and instance count (min 0, max 1) settings. The service is configured to listen on port 8000 internally.
     5.  Environment Variables (Cloud Run):
         *   `PYTHONUNBUFFERED=1`
         *   `UPSTASH_REDIS_ENDPOINT`: Your Upstash Redis endpoint (e.g., `gusc1-inviting-kit-31726.upstash.io`)
         *   `UPSTASH_REDIS_PORT`: Your Upstash Redis port (e.g., `31726`)
     6.  Secrets Management (Cloud Run): Securely injects sensitive data as environment variables using Google Secret Manager:
-        *   `GROQ_API_KEY`
-        *   `COHERE_API_KEY`
-        *   `UPSTASH_REDIS_PASSWORD` (The password for your Upstash Redis instance)
+        *   `GROQ_API_KEY` (latest version)
+        *   `COHERE_API_KEY` (latest version)
+        *   `UPSTASH_REDIS_PASSWORD` (The password for your Upstash Redis instance, latest version)
     7.  Service Account: Utilizes a dedicated service account with least-privilege permissions. Ensure this service account (or the default Compute Engine service account if no specific service account is set for the Cloud Run service) has the "Secret Manager Secret Accessor" (roles/secretmanager.secretAccessor) role to access the secrets specified.
 
 ## �� Project Structure
