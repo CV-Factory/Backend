@@ -15,8 +15,8 @@ LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 
 if UPSTASH_REDIS_PASSWORD and UPSTASH_REDIS_ENDPOINT and UPSTASH_REDIS_PORT:
     # Cloud Run 환경 또는 Upstash 정보가 모두 제공된 경우
-    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}"
-    logger.info("Using Upstash Redis for Celery.")
+    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}?ssl_cert_reqs=none"
+    logger.info("Using Upstash Redis for Celery with ssl_cert_reqs=none in URL.")
 else:
     # 로컬 환경 또는 Upstash 정보가 불완전한 경우 (기존 로컬 Redis 또는 REDIS_URL 사용)
     FINAL_REDIS_URL = LOCAL_REDIS_URL
@@ -42,10 +42,10 @@ except Exception as e:
 
 # 선택적 Celery 설정 (필요에 따라 추가)
 # Redis SSL 설정 추가
-if FINAL_REDIS_URL.startswith("rediss://"):
-    celery_app.conf.broker_use_ssl = {'ssl_cert_reqs': 'CERT_NONE'} # Upstash는 자체 서명된 인증서가 아니므로 CERT_NONE 또는 CERT_OPTIONAL 사용 가능
-    celery_app.conf.redis_backend_use_ssl = {'ssl_cert_reqs': 'CERT_NONE'}
-    logger.info("Celery SSL/TLS enabled for Upstash Redis with CERT_NONE.")
+# if FINAL_REDIS_URL.startswith("rediss://"):
+#    celery_app.conf.broker_use_ssl = {'ssl_cert_reqs': 'CERT_NONE'} # Upstash는 자체 서명된 인증서가 아니므로 CERT_NONE 또는 CERT_OPTIONAL 사용 가능
+#    celery_app.conf.redis_backend_use_ssl = {'ssl_cert_reqs': 'CERT_NONE'}
+#    logger.info("Celery SSL/TLS enabled for Upstash Redis with CERT_NONE.")
 
 celery_app.conf.update(
     task_serializer='json',
