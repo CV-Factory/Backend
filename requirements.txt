@@ -1,7 +1,6 @@
 fastapi
 uvicorn[standard]
 playwright
-google-generativeai
 # langchain
 # langchain-community, langchain-upstage 등 RAG에 필요한 구체적인 langchain 패키지 추가
 langchain
@@ -10,7 +9,8 @@ langchain-upstage
 faiss-cpu
 langchain-cohere
 langchain-experimental
-langchain-google-genai
 celery
 redis
-beautifulsoup4 
+beautifulsoup4
+groq
+python-dotenv 

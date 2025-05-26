@@ -11,15 +11,15 @@ from generate_cover_letter_semantic import generate_cover_letter
 import uuid
 from celery.exceptions import MaxRetriesExceededError
 from dotenv import load_dotenv
-import google.generativeai as genai
-import datetime # datetime 모듈 추가
+from groq import Groq
+import datetime
 
 # 전역 로깅 레벨 및 라이브러리 로깅 레벨 조정
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("cohere").setLevel(logging.WARNING)
-logging.getLogger("google.generativeai").setLevel(logging.INFO) # Gemini API 자체 로그는 INFO 유지
+logging.getLogger("groq").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
@@ -575,21 +575,32 @@ def extract_text_from_html_file(html_file_name: str):
 @celery_app.task(name='celery_tasks.filter_job_posting_with_llm')
 def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name은 이제 순수 파일명
     logger.info("Attempting to filter job posting with LLM.")
-    logger.info(f"Current GEMINI_API_KEY from env: {os.getenv('GEMINI_API_KEY')}")
-    logger.info(f"Current COHERE_API_KEY from env: {os.getenv('COHERE_API_KEY')}")
     # 로드된 .env 또는 환경 변수에서 API 키 가져오기
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    groq_api_key = os.getenv("GROQ_API_KEY")
     cohere_api_key = os.getenv("COHERE_API_KEY") # Cohere API 키도 로깅 및 확인
 
-    if not gemini_api_key:
-        logger.error("CRITICAL: GEMINI_API_KEY is NOT SET in the Celery task environment!")
-        raise ValueError("GEMINI_API_KEY is not set.")
+    if not groq_api_key:
+        logger.error("CRITICAL: GROQ_API_KEY is NOT SET in the Celery task environment!")
+        raise ValueError("GROQ_API_KEY is not set.")
     
     if not cohere_api_key: # Cohere API 키도 확인
-        logger.error("CRITICAL: COHERE_API_KEY is NOT SET in the Celery task environment!")
-        # 일단 경고만 하고 진행하거나, 필요에 따라 여기서도 raise ValueError 가능
         logger.warning("COHERE_API_KEY is not set. Some functionalities depending on Cohere might fail.")
 
+
+    # 로그 디렉토리 설정 (celery_tasks.py 내 다른 곳에서도 logs_dir 변수 사용 가능하도록)
+    logs_dir = "logs" 
+    if not os.path.exists(logs_dir):
+        try:
+            os.makedirs(logs_dir)
+            logger.info(f"Created directory: {logs_dir}")
+        except OSError as e:
+            logger.error(f"Error creating directory {logs_dir}: {e}", exc_info=True)
+            raise
+
+    raw_text_file_path = os.path.join(logs_dir, raw_text_file_name)
+    if not os.path.exists(raw_text_file_path):
+        logger.error(f"Raw text file not found: {raw_text_file_path}")
+        raise FileNotFoundError(f"Raw text file not found: {raw_text_file_path}")
 
     # 현재 날짜와 시간을 포함하는 파일명 생성 (YYYYMMDD_HHMMSS_originalfile.txt 형식)
     current_date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -614,54 +625,48 @@ def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name�
             logger.warning(f"Raw text content for {raw_text_file_name} is empty or whitespace. Skipping LLM filtering.")
             filtered_text_content = "원본 내용 없음 (LLM 필터링 건너뜀)"
         else:
-            # API 전송 전 줄바꿈 문자를 공백으로 치환하는 로직을 제거하고 원본 텍스트를 그대로 사용합니다.
             text_for_llm = raw_text_content
             logger.debug(f"Raw text (first 200 chars for LLM, newlines preserved): {text_for_llm[:200]}")
 
-            genai.configure(api_key=gemini_api_key)
-            
-            generation_config_gemini = genai.types.GenerationConfig(
-                temperature=0.2,
-                top_p=0.8,
-                top_k=20,
-                max_output_tokens=8192,
-            )
-
             try:
-                logger.info("Attempting to call Gemini API for text filtering...")
-                # 모델명을 'gemini-2.5-flash-preview-04-17'로 설정하고 try 블록 내부로 이동
-                model = genai.GenerativeModel('gemini-2.5-flash-preview-04-17')
+                logger.info("Attempting to call Groq API for text filtering...")
+                client = Groq(api_key=groq_api_key)
                 
-                # 프롬프트 문자열 따옴표 수정: f"""...""" 형태를 유지
-                prompt = f"""다음 텍스트에서 실제 채용 공고 내용과 직접적으로 관련된 부분만 추출해주세요.
+                # Groq API에 맞는 프롬프트 및 요청 구성
+                # 모델명은 사용 가능한 Groq 모델로 변경해야 합니다. 예: "mixtral-8x7b-32768"
+                # 사용 가능한 모델 목록은 Groq 문서를 참조하세요.
+                # 여기서는 "llama3-8b-8192" 모델을 예시로 사용합니다. (실제 사용 가능 여부 확인 필요)
+                prompt_text = """다음 텍스트에서 실제 채용 공고 내용과 직접적으로 관련된 부분만 추출해주세요. 불필요한 회사 소개, 개인정보보호 안내, 웹사이트 탐색 링크, 저작권 정보 등은 제외하고, 오직 직무 설명, 자격 요건, 우대사항, 복리후생, 근무 조건 등 채용 공고의 핵심 내용만 남겨주세요. 추출할 내용이 없다면 '추출할 내용 없음'이라고 답변해주세요.\n\n""" + text_for_llm
 
-                            추출할 내용이 없다면 '추출할 내용 없음'이라고 답변해주세요.
-
-                            {text_for_llm}
-                            """
-                
-                response = model.generate_content(
-                    prompt,
-                    generation_config=generation_config_gemini,
+                chat_completion = client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt_text
+                        }
+                    ],
+                    model="llama3-8b-8192", # 예시 모델명, 실제 사용 가능한 모델로 변경
+                    temperature=0.2,
+                    max_tokens=8000, # Groq 모델의 최대 토큰 수에 맞게 조정
+                    top_p=0.8,
+                    # stop=None, # 필요시 중단 시퀀스 설정
+                    # stream=False, # 스트리밍 사용 여부
                 )
                 
-                if response.parts:
-                    filtered_text_content = response.text
-                    logger.info(f"Successfully filtered text using Gemini API. Filtered text length: {len(filtered_text_content)}")
+                if chat_completion.choices and chat_completion.choices[0].message:
+                    filtered_text_content = chat_completion.choices[0].message.content
+                    logger.info(f"Successfully filtered text using Groq API. Filtered text length: {len(filtered_text_content)}")
                     if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
-                        logger.warning("LLM returned empty or 'no content' response.")
+                        logger.warning("Groq API returned empty or 'no content' response.")
                         filtered_text_content = "LLM 필터링 결과 내용 없음"
                 else:
-                    logger.warning("Gemini API response did not contain any parts (candidates).")
-                    if response.prompt_feedback:
-                        logger.warning(f"Prompt feedback from API: {response.prompt_feedback}")
+                    logger.warning("Groq API response did not contain expected content (choices or message).")
+                    # Groq API의 응답 구조에 따라 추가적인 오류 정보 로깅 가능
+                    # logger.warning(f"Full API response: {chat_completion}") 
                     filtered_text_content = "LLM 응답 없음 (API 반환 내용 없음)"
 
-            except google.api_core.exceptions.InvalidArgument as e:
-                logger.error(f"Gemini API InvalidArgument error: {e}", exc_info=True)
-                filtered_text_content = f"LLM API 요청 오류 (InvalidArgument): {str(e)}"
-            except Exception as e:
-                logger.error(f"Error during Gemini API call: {e}", exc_info=True)
+            except Exception as e: # Groq API 호출 관련 일반적인 예외 처리
+                logger.error(f"Error during Groq API call: {e}", exc_info=True)
                 filtered_text_content = f"LLM API 호출 중 알 수 없는 오류: {str(e)}"
 
         if not filtered_text_content or filtered_text_content.isspace():
@@ -678,18 +683,13 @@ def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name�
         return llm_filtered_file_name
 
     except FileNotFoundError:
+        logger.error(f"File not found during LLM filtering for {raw_text_file_name}", exc_info=True)
         raise
-    except ValueError as ve: # API 키 관련 오류
+    except ValueError as ve: # API 키 관련 오류 등
         logger.error(f"ValueError in LLM filtering for {raw_text_file_name}: {ve}", exc_info=True)
         raise
     except Exception as e:
-        error_msg = f"Failed to filter text with LLM for file {raw_text_file_name}: {e}"
-        logger.error(error_msg, exc_info=True)
-        # 실패 시 부분적으로 생성된 파일이 있다면 삭제 시도
-        if llm_filtered_file_name and os.path.exists(os.path.join(logs_dir, llm_filtered_file_name)):
-             logger.debug(f"Attempting to remove partially created LLM filtered file: {llm_filtered_file_name}")
-             try:
-                 os.remove(os.path.join(logs_dir, llm_filtered_file_name))
-             except Exception as e_del_llm:
-                 logger.error(f"Error removing partially created LLM file {llm_filtered_file_name}: {e_del_llm}")
+        logger.error(f"Unexpected error in filter_job_posting_with_llm for {raw_text_file_name}: {e}", exc_info=True)
+        # 실패 시 빈 문자열이나 오류 메시지를 담은 파일명을 반환하거나, 예외를 다시 발생시켜 Celery가 재시도하도록 할 수 있습니다.
+        # 여기서는 예외를 다시 발생시켜 작업 실패로 처리합니다.
         raise 

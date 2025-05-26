@@ -29,13 +29,13 @@
 
 ### 생성형 AI 및 고급 텍스트 처리
 
-- **거대 언어 모델(LLM) 통합**: `langchain_google_genai`의 `ChatGoogleGenerativeAI`를 통해 Google의 Gemini API를 통합하여 자기소개서와 같은 특정 애플리케이션 텍스트를 생성합니다. `generate_cover_letter_semantic.py` 스크립트는 LLM이 원하는 출력을 생성하기 위해 문맥적으로 관련된 정보로 어떻게 프롬프트되는지 보여줍니다.
+- **거대 언어 모델(LLM) 통합**: `langchain_groq`의 `ChatGroq`를 통해 Groq의 API를 통합하여 자기소개서와 같은 특정 애플리케이션 텍스트를 생성합니다. `generate_cover_letter_semantic.py` 스크립트는 LLM이 원하는 출력을 생성하기 위해 문맥적으로 관련된 정보로 어떻게 프롬프트되는지 보여줍니다.
 - **검색 증강 생성(RAG)**: Langchain을 사용하여 RAG 파이프라인을 구현하여 자기소개서 생성과 같은 작업에 대한 LLM의 컨텍스트 이해를 향상시킵니다. `generate_cover_letter_semantic.py`에 자세히 설명된 이 프로세스에는 다음이 포함됩니다.
     - 소스 문서 로드 (예: `logs/` 디렉토리의 채용 공고 텍스트).
     - 텍스트를 관리 가능한 조각으로 청킹 ( `langchain_experimental.text_splitter`의 `SemanticChunker` 또는 `langchain.text_splitter`의 `RecursiveCharacterTextSplitter` 사용).
     - `langchain_cohere`의 `CohereEmbeddings`를 사용하여 이러한 청크에 대한 벡터 임베딩 생성.
     - 효율적인 유사성 검색을 위해 이러한 임베딩을 FAISS 벡터 저장소 (`faiss-cpu`)에 저장.
-    - 생성 작업을 기반으로 관련 텍스트 청크를 검색하고 이를 Gemini LLM에 증강된 컨텍스트로 제공합니다. 이를 통해 LLM을 일반적인 프롬프트와 함께 사용하는 것보다 더 많은 정보에 입각하고 구체적이며 관련성 높은 텍스트 생성이 가능합니다.
+    - 생성 작업을 기반으로 관련 텍스트 청크를 검색하고 이를 Groq LLM에 증강된 컨텍스트로 제공합니다. 이를 통해 LLM을 일반적인 프롬프트와 함께 사용하는 것보다 더 많은 정보에 입각하고 구체적이며 관련성 높은 텍스트 생성이 가능합니다.
 
 ## 🛠 기술 스택
 
@@ -50,7 +50,7 @@
 | 데이터 처리 | Pydantic (요청/응답 모델용) |
 | 로깅 | 표준 Python `logging` |
 | 컨테이너화 | Docker, Docker Compose |
-| AI/ML | Langchain, Google Generative AI (Gemini), Cohere (임베딩용) |
+| AI/ML | Langchain, Groq API, Cohere (임베딩용) |
 | RAG | FAISS (벡터 저장소) |
 
 ## 🚀 시작하기
@@ -69,7 +69,7 @@
 ```bash
 conda create -n cvfactory_env python=3.10 -y
 conda activate cvfactory_env
-pip install google-generativeai langchain langchain-community faiss-cpu cohere python-dotenv langchain-experimental langchain-google-genai langchain-cohere --upgrade
+pip install langchain langchain-community faiss-cpu cohere python-dotenv langchain-experimental langchain-groq groq --upgrade
 ```
 4. Docker Compose를 사용하여 Docker 컨테이너를 빌드하고 실행합니다:
 
@@ -103,38 +103,20 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
     ```
     생성된 자기소개서는 터미널에 출력되고 `logs/generated_cover_letter_formatted.txt` 파일에 저장됩니다.
 
-## ⚙️ CI/CD 파이프라인
-
-이 프로젝트는 CI/CD 파이프라인을 위해 Google Cloud Build를 사용합니다.
-
--   **트리거**: GitHub 저장소의 `develop` 브랜치에 새로운 커밋이 푸시될 때 자동으로 시작됩니다.
--   **플랫폼**: Google Cloud Build.
--   **설정**: 빌드 및 배포 단계는 저장소 루트에 위치한 `cloudbuild.yaml` 파일에 정의되어 있습니다.
--   **주요 단계**:
-    1.  **Docker 이미지 빌드**: `Dockerfile`을 기반으로 애플리케이션의 Docker 이미지를 빌드합니다.
-    2.  **Artifact Registry에 푸시**: 빌드된 이미지를 Google Artifact Registry (`asia-northeast3-docker.pkg.dev/cvfactory-456014/cvfactory/cvfactory-server`)에 푸시합니다.
-    3.  **Cloud Run에 배포**: 새 이미지를 `asia-northeast3` 리전의 Google Cloud Run (`cvfactory-server` 서비스)에 배포합니다.
-    4.  **리소스 설정**: 배포 시 특정 CPU, 메모리 및 인스턴스 수 설정을 적용합니다.
-    5.  **환경 변수**: `PYTHONUNBUFFERED=1`, `REDIS_URL=redis://localhost:6379/0` 와 같은 환경 변수를 설정합니다.
-    6.  **보안 비밀 관리**: `GEMINI_API_KEY`, `COHERE_API_KEY`와 같은 민감한 데이터를 Google Secret Manager를 사용하여 환경 변수로 안전하게 주입합니다.
-    7.  **서비스 계정**: 파이프라인은 향상된 보안을 위해 최소 권한 원칙에 따라 전용 사용자 관리형 서비스 계정 (`cvfactory-builder-sa@cvfactory-456014.iam.gserviceaccount.com`)을 활용합니다.
-    8.  **로깅**: 모든 빌드 및 애플리케이션 로그는 `cloudbuild.yaml`의 `logging: CLOUD_LOGGING_ONLY` 설정에 따라 중앙 집중식 모니터링을 위해 Cloud Logging으로 전송되도록 구성됩니다.
-
 ## 📁 프로젝트 구조
 
 ```
 .
 ├── main.py           # FastAPI 애플리케이션 진입점 및 API 엔드포인트
 ├── celery_app.py     # Celery 애플리케이션 인스턴스 설정
-├── celery_tasks.py   # Celery 백그라운드 작업 정의 (웹 스크레이핑, 파싱, 포맷팅 등)
+├── celery_tasks.py   # Celery 백그라운드 작업 정의 (웹 스크레이핑, 파싱, 포맷팅, LLM 호출 등)
 ├── Dockerfile        # 웹 및 워커 서비스를 위한 Docker 이미지 정의 (의존성, Redis, Supervisor, Playwright 설정 포함)
 ├── docker-compose.yml# 로컬 개발을 위한 멀티 컨테이너 Docker 애플리케이션 정의 및 설정 (web, worker, redis)
 ├── requirements.txt  # 프로젝트에 필요한 Python 의존성 목록
 ├── entrypoint.sh     # Docker 컨테이너 내부에서 Supervisor를 통해 서비스(FastAPI, Celery, Redis)를 시작하거나 개별 서비스를 시작하는 스크립트
-├── supervisord.conf  # Cloud Run을 위한 단일 컨테이너 내에서 FastAPI(Uvicorn), Celery 워커, Redis 서버 프로세스를 관리하는 Supervisor 설정 파일
-├── cloudbuild.yaml   # CI/CD를 위한 Google Cloud Build 설정 파일 (빌드, Artifact Registry에 푸시, Cloud Run에 배포)
-├── generate_cover_letter_semantic.py # RAG 및 Gemini API를 사용하여 자기소개서를 생성하는 스크립트
-├── logs/             # 로컬 애플리케이션 로그 및 생성된 파일 디렉토리 (로컬 Docker Compose 설정에서 볼륨으로 마운트됨). Cloud Run에서는 로그가 Cloud Logging으로 전송됩니다.
+├── supervisord.conf  # 단일 컨테이너 내에서 FastAPI(Uvicorn), Celery 워커, Redis 서버 프로세스를 관리하는 Supervisor 설정 파일
+├── generate_cover_letter_semantic.py # RAG 및 Groq API를 사용하여 자기소개서를 생성하는 스크립트
+├── logs/             # 로컬 애플리케이션 로그 및 생성된 파일 디렉토리 (로컬 Docker Compose 설정에서 볼륨으로 마운트됨).
 ├── LICENSE           # 라이선스 파일 (CC BY NC 4.0)
 ├── README.md         # 영문 README 파일
 ```

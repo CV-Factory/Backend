@@ -7,8 +7,8 @@ ENV APP_HOME /app
 ENV PORT 8080
 # Celery가 사용할 Redis URL (컨테이너 내부 Redis 사용 예정이므로 주석 처리 또는 localhost로 변경)
 # ENV REDIS_URL redis://your-redis-host:6379/0 
-# Gemini API Key (Cloud Run 서비스 환경 변수 또는 Secret Manager에서 설정)
-# ENV GEMINI_API_KEY your_api_key
+# Groq API Key (Cloud Run 서비스 환경 변수 또는 Secret Manager에서 설정)
+# ENV GROQ_API_KEY your_api_key
 
 WORKDIR $APP_HOME
 
