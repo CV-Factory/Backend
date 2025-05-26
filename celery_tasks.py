@@ -41,7 +41,7 @@ except Exception as e_dotenv:
 # 상수 정의
 MAX_IFRAME_DEPTH = 3  # iframe 최대 재귀 깊이
 IFRAME_LOAD_TIMEOUT = 15000  # iframe 로드 타임아웃 (밀리초)
-ELEMENT_HANDLE_TIMEOUT = 15000 # element handle 가져오기 타임아웃 (밀리초)
+ELEMENT_HANDLE_TIMEOUT = 30000 # element handle 가져오기 타임아웃 (밀리초)
 
 def sanitize_filename(url: str) -> str:
     """URL을 기반으로 짧고 안전한 파일 이름을 생성합니다."""
@@ -574,23 +574,35 @@ def extract_text_from_html_file(html_file_name: str):
 
 @celery_app.task(name='celery_tasks.filter_job_posting_with_llm')
 def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name은 이제 순수 파일명
-    """
-    logs 디렉토리에 있는 원본 텍스트 파일(raw_text_file_name)을 읽어,
-    LLM(예: Gemini API)을 사용하여 채용 공고와 관련된 내용만 필터링하고,
-    결과를 _llm_filtered.txt 접미사를 붙여 새로운 파일로 저장합니다.
-    raw_text_file_name: logs 디렉토리 내의 원본 .txt 파일 이름 (예: text_content_from_html_... .txt)
-    """
-    logger.info(f"Attempting to filter job posting content using LLM for file: {raw_text_file_name}")
-    logs_dir = "logs" # 현재 파일 위치 기준 상대 경로
-    # raw_text_file_name이 이제 순수 파일명이므로, logs_dir와 결합하여 전체 경로 생성
-    raw_text_file_path = os.path.join(logs_dir, raw_text_file_name)
+    logger.info("Attempting to filter job posting with LLM.")
+    logger.info(f"Current GEMINI_API_KEY from env: {os.getenv('GEMINI_API_KEY')}")
+    logger.info(f"Current COHERE_API_KEY from env: {os.getenv('COHERE_API_KEY')}")
+    # 로드된 .env 또는 환경 변수에서 API 키 가져오기
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    cohere_api_key = os.getenv("COHERE_API_KEY") # Cohere API 키도 로깅 및 확인
 
-    if not os.path.exists(raw_text_file_path):
-        error_msg = f"Raw text file not found for LLM filtering: {raw_text_file_path}"
-        logger.error(error_msg)
-        raise FileNotFoundError(error_msg)
+    if not gemini_api_key:
+        logger.error("CRITICAL: GEMINI_API_KEY is NOT SET in the Celery task environment!")
+        raise ValueError("GEMINI_API_KEY is not set.")
+    
+    if not cohere_api_key: # Cohere API 키도 확인
+        logger.error("CRITICAL: COHERE_API_KEY is NOT SET in the Celery task environment!")
+        # 일단 경고만 하고 진행하거나, 필요에 따라 여기서도 raise ValueError 가능
+        logger.warning("COHERE_API_KEY is not set. Some functionalities depending on Cohere might fail.")
 
-    llm_filtered_file_name = ""
+
+    # 현재 날짜와 시간을 포함하는 파일명 생성 (YYYYMMDD_HHMMSS_originalfile.txt 형식)
+    current_date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name_without_ext = os.path.splitext(raw_text_file_name)[0]
+    # "text_content_from_html_" 프리픽스가 있다면 제거, 없다면 그대로 사용
+    if base_name_without_ext.startswith("text_content_from_html_"):
+        cleaned_base_name = base_name_without_ext.replace("text_content_from_html_", "")
+    else:
+        cleaned_base_name = base_name_without_ext # 예: 날짜_고유번호 형식 그대로 사용
+        
+    llm_filtered_file_name = f"llm_filtered_job_posting_{cleaned_base_name}.txt"
+    llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_file_name)
+
     filtered_text_content = ""
 
     try:
@@ -605,11 +617,6 @@ def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name�
             # API 전송 전 줄바꿈 문자를 공백으로 치환하는 로직을 제거하고 원본 텍스트를 그대로 사용합니다.
             text_for_llm = raw_text_content
             logger.debug(f"Raw text (first 200 chars for LLM, newlines preserved): {text_for_llm[:200]}")
-
-            gemini_api_key = os.getenv("GEMINI_API_KEY")
-            if not gemini_api_key:
-                logger.error("GEMINI_API_KEY not found in environment variables.")
-                raise ValueError("GEMINI_API_KEY is not set.")
 
             genai.configure(api_key=gemini_api_key)
             
@@ -663,19 +670,6 @@ def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name�
 
         logger.debug(f"LLM filtered text (first 200 chars): {filtered_text_content[:200]}")
         
-        # raw_text_file_name은 순수 파일명이므로, 경로 제거 로직 불필요
-        # base_name = raw_text_file_name.replace("text_content_from_html_", "").replace(".txt", "") 
-        # 위 로직 대신 파일명에서 확장자만 제거하여 base_name 구성
-        base_name_without_ext = os.path.splitext(raw_text_file_name)[0]
-        # "text_content_from_html_" 프리픽스가 있다면 제거, 없다면 그대로 사용
-        if base_name_without_ext.startswith("text_content_from_html_"):
-            cleaned_base_name = base_name_without_ext.replace("text_content_from_html_", "")
-        else:
-            cleaned_base_name = base_name_without_ext # 예: 날짜_고유번호 형식 그대로 사용
-            
-        llm_filtered_file_name = f"llm_filtered_job_posting_{cleaned_base_name}.txt"
-        llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_file_name)
-
         with open(llm_filtered_file_path, "w", encoding="utf-8") as f:
             f.write(filtered_text_content)
         
