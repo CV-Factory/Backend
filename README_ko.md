@@ -132,7 +132,7 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
         *   `GROQ_API_KEY`
         *   `COHERE_API_KEY`
         *   `UPSTASH_REDIS_PASSWORD` (Upstash Redis 인스턴스의 비밀번호)
-    7.  서비스 계정: 최소 권한 원칙에 따른 전용 서비스 계정을 활용합니다.
+    7.  서비스 계정: 최소 권한 원칙에 따른 전용 서비스 계정을 활용합니다. 이 서비스 계정(또는 Cloud Run 서비스에 특정 서비스 계정이 설정되지 않은 경우 기본 Compute Engine 서비스 계정)에 지정된 보안 비밀에 접근하기 위한 "Secret Manager 비밀 접근자"(roles/secretmanager.secretAccessor) 역할이 부여되었는지 확인하십시오.
 
 ## 📁 프로젝트 구조
 

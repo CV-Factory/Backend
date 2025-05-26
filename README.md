@@ -140,9 +140,9 @@ This project uses Google Cloud Build for its CI/CD pipeline.
         *   `GROQ_API_KEY`
         *   `COHERE_API_KEY`
         *   `UPSTASH_REDIS_PASSWORD` (The password for your Upstash Redis instance)
-    7.  Service Account: Utilizes a dedicated service account with least-privilege permissions.
+    7.  Service Account: Utilizes a dedicated service account with least-privilege permissions. Ensure this service account (or the default Compute Engine service account if no specific service account is set for the Cloud Run service) has the "Secret Manager Secret Accessor" (roles/secretmanager.secretAccessor) role to access the secrets specified.
 
-## 📁 Project Structure
+## �� Project Structure
 
 ```
 .
