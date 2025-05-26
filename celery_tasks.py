@@ -611,8 +611,6 @@ def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name�
             groq_api_key = os.getenv("GROQ_API_KEY")
             if not groq_api_key:
                 logger.error("CRITICAL: GROQ_API_KEY is NOT SET in the Celery task environment!")
-                # API 키가 없으면 플레이스홀더 대신 에러를 발생시키거나, 정해진 값을 반환할 수 있습니다.
-                # 여기서는 이전처럼 플레이스홀더를 기록하고 반환합니다.
                 placeholder_content = "GROQ_API_KEY not configured. LLM filtering skipped."
                 with open(llm_filtered_file_path, "w", encoding="utf-8") as f:
                     f.write(placeholder_content)
@@ -621,15 +619,11 @@ def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name�
 
             try:
                 logger.info("Initializing Groq Chat LLM (meta-llama/llama-4-maverick-17b-128e-instruct)...")
-                # 모델명을 정확히 명시합니다. Langchain 문서 또는 Groq API 문서를 참조하여 사용 가능한 모델명을 확인하세요.
-                # 요청하신 모델명 "meta-llama/llama-4-maverick-17b-128e-instruct" 그대로 사용합니다.
-                # 실제 Groq에서 이 모델명을 지원하는지 확인이 필요합니다. (예시로 llama3-8b-8192 등)
-                # 우선은 요청하신 모델명으로 설정합니다.
                 model = ChatGroq(
-                    temperature=0.1, # 채용공고 추출 작업이므로 낮은 온도로 설정
+                    temperature=0.1, 
                     groq_api_key=groq_api_key,
                     model_name="meta-llama/llama-4-maverick-17b-128e-instruct", 
-                    max_tokens=8000 # 필요시 조정
+                    max_tokens=8000 
                 )
                 logger.info("Groq Chat LLM initialized successfully.")
 
@@ -668,24 +662,20 @@ Here is the text to analyze:
                 chain = prompt | model | output_parser
                 
                 logger.info(f"Invoking Groq LLM chain for file: {raw_text_file_name}...")
-                # text_for_llm = raw_text_content # 원본 텍스트 그대로 사용
                 filtered_text_content = chain.invoke({"text_input": raw_text_content})
                 logger.info(f"Groq LLM chain invocation complete. Raw output length: {len(filtered_text_content)}")
 
-                    if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
+                if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
                     logger.warning("LLM returned empty or '추출할 내용 없음' response.")
-                    filtered_text_content = "LLM 필터링 결과 내용 없음" # 일관된 메시지로 변경
+                    filtered_text_content = "LLM 필터링 결과 내용 없음"
                 else:
                     logger.info("Successfully filtered text using Groq LLM.")
-                    # 결과가 너무 길 경우를 대비한 로깅 (앞부분만)
                     logger.debug(f"Filtered text (first 300 chars): {filtered_text_content[:300]}")
 
             except Exception as e_groq:
                 logger.error(f"Error during Groq LLM call for {raw_text_file_name}: {e_groq}", exc_info=True)
                 filtered_text_content = f"LLM API 호출 중 오류 발생: {str(e_groq)}"
-                # 오류 발생 시에도 파일은 생성하되, 오류 내용을 기록
         
-        # 최종 필터링된 내용을 파일에 저장
         logger.info(f"Writing filtered content to: {llm_filtered_file_path}")
         with open(llm_filtered_file_path, "w", encoding="utf-8") as f:
             f.write(filtered_text_content)
@@ -695,20 +685,16 @@ Here is the text to analyze:
 
     except FileNotFoundError as e_fnf:
         logger.error(f"FileNotFoundError in filter_job_posting_with_llm for {raw_text_file_name}: {e_fnf}", exc_info=True)
-        # 파일럿 실행 시에는 오류 발생 시에도 다음 단계로 넘어갈 수 있도록 임시 파일명을 반환하거나,
-        # 혹은 None을 반환하여 후속 작업에서 이를 처리하도록 할 수 있습니다.
-        # 여기서는 오류를 다시 발생시켜 Celery가 실패로 처리하도록 합니다.
         raise
     except Exception as e_general:
         logger.error(f"An unexpected error occurred in filter_job_posting_with_llm for {raw_text_file_name}: {e_general}", exc_info=True)
-        # 예측하지 못한 오류 발생 시, 부분적으로 생성된 파일이 있다면 삭제 시도
         if os.path.exists(llm_filtered_file_path):
             try:
                 os.remove(llm_filtered_file_path)
                 logger.info(f"Removed partially created file due to error: {llm_filtered_file_path}")
             except Exception as e_del:
                 logger.error(f"Error removing partially created file {llm_filtered_file_path}: {e_del}")
-        raise # 오류를 다시 발생시킴 
+        raise
 
 async def extract_body_html_with_playwright_and_iframe(url: str, task_id: str = "N/A") -> Optional[str]:
     """
