@@ -1,6 +1,5 @@
 fastapi
 uvicorn[standard]
-click==8.0.4
 playwright
 # google-generativeai # 더 이상 사용하지 않음
 # langchain

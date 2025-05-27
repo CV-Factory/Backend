@@ -1,7 +1,7 @@
 import os
 from celery import Celery
 import logging
-import ssl # ssl 모듈 임포트
+import ssl
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +16,8 @@ LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 
 if UPSTASH_REDIS_PASSWORD and UPSTASH_REDIS_ENDPOINT and UPSTASH_REDIS_PORT:
     # Cloud Run 환경 또는 Upstash 정보가 모두 제공된 경우
-    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}" # ssl_cert_reqs 파라미터 제거
-    logger.info("Using Upstash Redis for Celery.")
+    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}?ssl_cert_reqs=none"
+    logger.info("Using Upstash Redis for Celery with ssl_cert_reqs=none in URL.")
 else:
     # 로컬 환경 또는 Upstash 정보가 불완전한 경우 (기존 로컬 Redis 또는 REDIS_URL 사용)
     FINAL_REDIS_URL = LOCAL_REDIS_URL
@@ -42,11 +42,11 @@ except Exception as e:
     raise
 
 # 선택적 Celery 설정 (필요에 따라 추가)
-# Redis SSL 설정 추가
-if FINAL_REDIS_URL.startswith("rediss://"):
-   celery_app.conf.broker_use_ssl = {'ssl_cert_reqs': ssl.CERT_REQUIRED} # ssl.CERT_REQUIRED 사용
-   celery_app.conf.redis_backend_use_ssl = {'ssl_cert_reqs': ssl.CERT_REQUIRED} # ssl.CERT_REQUIRED 사용
-   logger.info("Celery SSL/TLS enabled for Upstash Redis with ssl.CERT_REQUIRED.")
+# Redis SSL 설정은 URL에서 처리하므로 주석 유지
+# if FINAL_REDIS_URL.startswith("rediss://"):
+#    celery_app.conf.broker_use_ssl = {'ssl_cert_reqs': ssl.CERT_REQUIRED} # ssl.CERT_REQUIRED 사용
+#    celery_app.conf.redis_backend_use_ssl = {'ssl_cert_reqs': ssl.CERT_REQUIRED} # ssl.CERT_REQUIRED 사용
+#    logger.info("Celery SSL/TLS enabled for Upstash Redis with ssl.CERT_REQUIRED.")
 
 celery_app.conf.update(
     task_serializer='json',
