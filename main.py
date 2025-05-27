@@ -155,9 +155,15 @@ async def get_task_status(task_id: str):
 
         if status == 'SUCCESS':
             logger.info(f"작업 성공 (Task ID: {task_id})")
-            response_data['result'] = task_result.info
-            if not response_data['current_step'] and isinstance(task_result.info, dict):
-                response_data['current_step'] = task_result.info.get('current_step', 'Completed')
+            actual_result_payload = task_result.info
+            
+            logger.info(f"Task ID: {task_id} SUCCESS. task_result.result (raw): {task_result.result}, type: {type(task_result.result)}")
+            logger.info(f"Task ID: {task_id} SUCCESS. task_result.info (raw): {actual_result_payload}, type: {type(actual_result_payload)}")
+
+            response_data['result'] = actual_result_payload
+
+            if not response_data['current_step'] and isinstance(actual_result_payload, dict):
+                response_data['current_step'] = actual_result_payload.get('current_step', 'Completed')
             elif not response_data['current_step']:
                 response_data['current_step'] = 'Completed'
         elif status == 'FAILURE':
