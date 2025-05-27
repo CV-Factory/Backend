@@ -47,6 +47,7 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
     result: Any | None = None
+    current_step: str | None = None
 
 @app.on_event("startup")
 async def startup_event():
@@ -133,25 +134,55 @@ async def get_task_status(task_id: str):
         else:
              logger.info(f"Task ID: {task_id}, 작업 아직 준비되지 않음 (not ready).")
 
+        # current_step 정보 가져오기
+        current_step_from_meta = None
+        if isinstance(task_result.info, dict): # meta 정보가 딕셔너리 형태일 때
+            current_step_from_meta = task_result.info.get('current_step')
+        elif task_result.status == 'SUCCESS' and isinstance(result, dict): # 성공 시 result에 meta가 포함될 수도 있음 (Celery 설정에 따라 다름)
+            current_step_from_meta = result.get('current_step')
+
 
         response_data = {
             "task_id": task_id,
             "status": status,
-            "result": result # 성공/실패 시 실제 결과, 그 외에는 None 또는 이전 상태의 결과일 수 있음
+            "result": result, # 성공/실패 시 실제 결과, 그 외에는 None 또는 이전 상태의 결과일 수 있음
+            "current_step": current_step_from_meta
         }
 
         # 최종적으로 Celery 작업의 성공/실패 상태에 따라 로깅 및 result 재정의
         if status == 'SUCCESS':
             logger.info(f"작업 성공 (Task ID: {task_id})")
             # result는 이미 위에서 할당됨
+            # SUCCESS 상태일 때 result 딕셔너리 안에 current_step이 이미 포함되어 있을 수 있음
+            if isinstance(result, dict) and 'current_step' in result:
+                 response_data['current_step'] = result.get('current_step')
         elif status == 'FAILURE':
             logger.warning(f"작업 실패 (Task ID: {task_id}). 저장된 결과: {result}")
             # 실패 시 result는 일반적으로 예외 객체임
+            failure_meta = {}
+            if isinstance(task_result.info, dict): # 실패 시에도 meta 정보가 있을 수 있음
+                failure_meta = task_result.info
+            
             response_data['result'] = {"error": str(result), "traceback": task_result.traceback if result else None}
+            # 실패 시 current_step을 meta에서 가져오거나, result (예외의 일부)에서 가져오도록 시도
+            if 'current_step' not in response_data or not response_data['current_step']:
+                response_data['current_step'] = failure_meta.get('current_step', 'UNKNOWN_FAILURE_STEP')
+
         elif status == 'PENDING':
              logger.info(f"작업 대기 중 (Task ID: {task_id})")
+             # PENDING 상태에서도 meta 정보 (current_step)를 가져올 수 있음
+             if current_step_from_meta:
+                 response_data['current_step'] = current_step_from_meta
+        elif status == 'PROGRESS': # PROGRESS 상태 명시적으로 처리
+            logger.info(f"작업 진행 중 (Task ID: {task_id}). Meta: {task_result.info}")
+            if current_step_from_meta:
+                response_data['current_step'] = current_step_from_meta
+            # PROGRESS 상태일 때 result는 보통 meta 정보와 동일하거나, 가장 최근 meta일 수 있음
+            response_data['result'] = task_result.info # PROGRESS 상태의 result는 meta 정보로 설정
         else:
             logger.info(f"작업 상태 (Task ID: {task_id}): {status}")
+            if current_step_from_meta: # 다른 상태에서도 current_step 시도
+                response_data['current_step'] = current_step_from_meta
         
         end_time = time.time()
         logger.info(f"작업 상태 조회 완료 (Task ID: {task_id}). 소요 시간: {end_time - start_time:.4f}초")

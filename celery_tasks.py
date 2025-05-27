@@ -333,153 +333,138 @@ def open_url_with_playwright_inspector(url: str):
 
 @celery_app.task(bind=True, name='celery_tasks.perform_processing', max_retries=3, default_retry_delay=60)
 def perform_processing(self, job_url: str, prompt: str, job_site_name: str = "unknown_site"):
+    """
+    전체 자기소개서 생성 파이프라인을 수행하는 Celery 작업입니다.
+    Playwright를 사용하여 웹에서 채용 공고 HTML을 추출하고,
+    텍스트를 정제한 후, LLM을 사용하여 자기소개서를 생성합니다.
+    """
     task_id = self.request.id
     logger.info(f"Task {task_id} (UUID: {uuid.uuid4()}): perform_processing 시작, job_url: {job_url}, job_site_name: {job_site_name}")
 
-    if not job_url:
-        logger.error(f"Task {task_id}: job_url이 제공되지 않았습니다.")
-        self.update_state(state='FAILURE', meta={'exc_type': 'ValueError', 'exc_message': 'job_url is required'})
-        raise ValueError("job_url is required") # Celery는 이 예외를 잡고 작업을 실패로 표시
-
-    # prompt가 None일 경우를 대비한 처리
-    prompt_for_generation = prompt if prompt is not None else ""
-    if not prompt:
-        logger.warning(f"Task {task_id}: 사용자 프롬프트가 제공되지 않았습니다. 자기소개서 생성은 채용 공고 기반으로만 진행될 수 있습니다.")
-    else:
-        logger.info(f"Task {task_id}: 사용자 프롬프트 (앞부분): {prompt_for_generation[:100]}...")
-    
-    html_file_name = None
-    raw_text_file_name = None
-    llm_filtered_file_name = None
-    rag_ready_file_name = None
-    logs_dir = "logs" # 일관성을 위해 여기서도 정의
+    extracted_html_file_path = None
+    raw_text_file_path = None
+    filtered_text_file_path = None
+    final_cover_letter_path = None
+    error_occurred = False
+    error_message = "An unexpected error occurred."
+    current_step = "INITIALIZING"
 
     try:
-        # 1단계: URL에서 HTML 스크래핑 및 저장
-        logger.info(f"Task {task_id}: 1단계: {job_url} 에서 HTML 추출 시도 (job_site_name: {job_site_name})")
-        html_file_name = extract_body_html_from_url(url=job_url) 
-        if not html_file_name:
-            logger.error(f"Task {task_id}: HTML 추출 실패 (extract_body_html_from_url 반환값 없음)")
-            # update_state는 여기서 할 필요 없음. 예외 발생 시 Celery가 처리.
-            raise RuntimeError("Failed to extract HTML content from URL.")
-        logger.info(f"Task {task_id}: HTML 추출 성공, 파일명: {html_file_name}")
+        self.update_state(state='PROGRESS', meta={'current_step': '채용 공고 HTML 추출 중...', 'job_url': job_url})
+        current_step = "HTML_EXTRACTION"
+        logger.info(f"Task {task_id}: HTML 추출 시작 - extract_body_html_from_url 호출")
+        extracted_html_file_path = extract_body_html_from_url.s(url=job_url).apply(task_id=f"{task_id}_html").get(timeout=1800) # 30분 타임아웃
+        if not extracted_html_file_path or not os.path.exists(extracted_html_file_path):
+            raise FileNotFoundError(f"HTML 추출 실패 또는 파일({extracted_html_file_path})을 찾을 수 없습니다.")
+        logger.info(f"Task {task_id}: HTML 추출 완료. 파일 경로: {extracted_html_file_path}")
 
-        # 2단계: 저장된 HTML 파일에서 전체 텍스트 추출 (한 줄로)
-        logger.info(f"Task {task_id}: 2단계: {html_file_name} 에서 전체 텍스트 추출 시도")
-        raw_text_file_name = extract_text_from_html_file(html_file_name)
-        if not raw_text_file_name:
-            logger.error(f"Task {task_id}: 텍스트 추출 실패 (extract_text_from_html_file 반환값 없음)")
-            raise RuntimeError("Failed to extract text from HTML file.")
-        logger.info(f"Task {task_id}: 전체 텍스트 추출 성공, 파일명: {raw_text_file_name}")
+        self.update_state(state='PROGRESS', meta={'current_step': 'HTML에서 텍스트 추출 중...', 'html_file': extracted_html_file_path})
+        current_step = "TEXT_EXTRACTION"
+        logger.info(f"Task {task_id}: 텍스트 추출 시작 - extract_text_from_html_file 호출")
+        # s()를 사용하여 subtask 시그니처를 만들고, task_id를 지정하여 apply_async 대신 apply().get()으로 동기적 실행
+        # 단, 이 경우 extract_text_from_html_file이 @celery_app.task로 데코레이팅 되어 있어야 함.
+        # 여기서는 이미 그렇게 되어 있다고 가정.
+        raw_text_file_path = extract_text_from_html_file.s(html_file_name=extracted_html_file_path).apply(task_id=f"{task_id}_text").get(timeout=600) # 10분 타임아웃
+        if not raw_text_file_path or not os.path.exists(raw_text_file_path):
+            raise FileNotFoundError(f"텍스트 추출 실패 또는 파일({raw_text_file_path})을 찾을 수 없습니다.")
+        logger.info(f"Task {task_id}: 텍스트 추출 완료. 파일 경로: {raw_text_file_path}")
 
-        # 3단계: 추출된 전체 텍스트를 LLM으로 필터링
-        logger.info(f"Task {task_id}: 3단계: {raw_text_file_name} LLM 필터링 시도")
-        llm_filtered_file_name = filter_job_posting_with_llm(raw_text_file_name)
-        if not llm_filtered_file_name:
-            logger.error(f"Task {task_id}: LLM 필터링 실패 (filter_job_posting_with_llm 반환값 없음)")
-            raise RuntimeError("Failed to filter text using LLM.")
-        logger.info(f"Task {task_id}: LLM 필터링 성공, 파일명: {llm_filtered_file_name}")
+        self.update_state(state='PROGRESS', meta={'current_step': 'LLM으로 채용 공고 필터링 중...', 'raw_text_file': raw_text_file_path})
+        current_step = "LLM_FILTERING"
+        logger.info(f"Task {task_id}: LLM 필터링 시작 - filter_job_posting_with_llm 호출")
+        # filter_job_posting_with_llm도 Celery 작업으로 가정
+        filtered_text_file_path = filter_job_posting_with_llm.s(raw_text_file_name=raw_text_file_path).apply(task_id=f"{task_id}_filter").get(timeout=1200) # 20분 타임아웃
+        if not filtered_text_file_path or not os.path.exists(filtered_text_file_path):
+            raise FileNotFoundError(f"LLM 필터링 실패 또는 파일({filtered_text_file_path})을 찾을 수 없습니다.")
+        logger.info(f"Task {task_id}: LLM 필터링 완료. 파일 경로: {filtered_text_file_path}")
 
-        # 4단계: LLM 필터링된 텍스트를 RAG용으로 직접 사용 (format_text_file 단계 제거)
-        logger.info(f"Task {task_id}: 4단계: {llm_filtered_file_name}을 RAG용 최종 텍스트로 사용")
-        rag_ready_file_name = llm_filtered_file_name # format_text_file 호출 제거하고 직접 할당
-        if not rag_ready_file_name: # llm_filtered_file_name이 없을 경우를 대비
-            logger.error(f"Task {task_id}: LLM 필터링된 파일명이 없습니다. RAG 처리를 진행할 수 없습니다.")
-            raise RuntimeError("LLM filtered file name is missing.")
-        logger.info(f"Task {task_id}: RAG용 최종 텍스트 파일명 설정 완료: {rag_ready_file_name}")
-
-        # 5단계: RAG용 최종 텍스트 파일 내용 읽기
-        logger.info(f"Task {task_id}: 5단계: RAG용 최종 텍스트 파일 ({rag_ready_file_name}) 내용 읽기 시도")
-        rag_ready_file_path = os.path.join(logs_dir, rag_ready_file_name)
+        self.update_state(state='PROGRESS', meta={'current_step': '자기소개서 생성 중...', 'filtered_text_file': filtered_text_file_path})
+        current_step = "COVER_LETTER_GENERATION"
+        logger.info(f"Task {task_id}: 자기소개서 생성 시작 - generate_cover_letter 호출")
         
-        job_posting_content_for_rag = ""
-        if not os.path.exists(rag_ready_file_path):
-            error_msg = f"Task {task_id}: RAG용 최종 포맷팅된 파일 ({rag_ready_file_path})을 찾을 수 없습니다."
-            logger.error(error_msg)
-            raise FileNotFoundError(error_msg) # FileNotFoundError는 명시적으로 발생
-
-        with open(rag_ready_file_path, 'r', encoding='utf-8') as f:
-            job_posting_content_for_rag = f.read()
-        logger.info(f"Task {task_id}: RAG용 최종 텍스트 파일 읽기 성공. 내용 길이: {len(job_posting_content_for_rag)}")
-        logger.debug(f"Task {task_id}: RAG에 사용될 최종 콘텐츠 (처음 200자): {job_posting_content_for_rag[:200]}")
-
-        # 6단계: 커버 레터 생성 (RAG)
-        logger.info(f"Task {task_id}: 6단계: 자기소개서 생성 시도. User prompt (앞부분): {prompt_for_generation[:100]}... Job posting (앞부분): {job_posting_content_for_rag[:100]}...")
-        # generate_cover_letter_semantic.py의 generate_cover_letter 함수가 (raw, formatted) 튜플을 반환한다고 가정
-        raw_cover_letter, formatted_cover_letter = generate_cover_letter(
-            job_posting_content=job_posting_content_for_rag, 
-            prompt=prompt_for_generation 
+        # generate_cover_letter 함수는 Celery task가 아닐 수 있으므로, 직접 호출하거나 필요시 task로 래핑
+        # 이 함수는 generate_cover_letter_semantic.py 에 정의되어 있음
+        # 여기서는 직접 호출한다고 가정. 만약 해당 함수가 오래 걸린다면 별도 task화 고려.
+        from generate_cover_letter_semantic import generate_cover_letter # 지연 로딩
+        generation_result = generate_cover_letter(
+            job_posting_file_path=filtered_text_file_path,
+            user_prompt=prompt,
+            job_site_name=job_site_name,
+            task_id=task_id # task_id 전달
         )
-        logger.info(f"Task {task_id}: 자기소개서 생성 완료. 원본 길이: {len(raw_cover_letter)}, 포맷된 버전 길이: {len(formatted_cover_letter)}")
         
-        # 생성된 자기소개서 파일로 저장
-        # 파일명 형식: cover_letter_YYYYMMDD_UUIDshort.txt
-        try:
-            current_date_str = datetime.datetime.now().strftime("%Y%m%d")
-            unique_id_for_cv = uuid.uuid4().hex[:8]
-            cover_letter_filename = f"cover_letter_{current_date_str}_{unique_id_for_cv}.txt"
-            cover_letter_path = os.path.join(logs_dir, cover_letter_filename)
-            with open(cover_letter_path, "w", encoding="utf-8") as f:
-                f.write(formatted_cover_letter) # 포맷팅된 버전 저장
-            logger.info(f"Task {task_id}: 생성된 자기소개서 저장 완료: {cover_letter_path}")
-        except Exception as e_save_cv:
-            logger.error(f"Task {task_id}: 생성된 자기소개서 파일 저장 중 오류 발생: {e_save_cv}", exc_info=True)
-            # 저장 실패가 전체 작업 실패를 의미하지는 않도록 처리 (로깅만 하고 결과는 계속 반환)
+        raw_cover_letter = generation_result.get("raw_cover_letter")
+        formatted_cover_letter = generation_result.get("formatted_cover_letter")
+        final_cover_letter_path = generation_result.get("output_file_path")
 
-        # 임시 파일들 삭제 (선택 사항, 최종 RAG 파일은 남겨둠)
-        # files_to_delete_intermediate = [html_file_name, raw_text_file_name, llm_filtered_file_name] 
-        # for f_name in files_to_delete_intermediate:
-        #     try:
-        #         if f_name: 
-        #             f_path = os.path.join(logs_dir, f_name)
-        #             if os.path.exists(f_path):
-        #                 os.remove(f_path)
-        #                 logger.info(f"Task {task_id}: 중간 파일 삭제 성공: {f_path}")
-        #     except Exception as e_del: # 변수명 변경
-        #         logger.warning(f"Task {task_id}: 중간 파일 삭제 중 오류 ({f_name}): {e_del}")
+        if not raw_cover_letter or not formatted_cover_letter or not final_cover_letter_path or not os.path.exists(final_cover_letter_path):
+            raise ValueError(f"자기소개서 생성 실패 또는 결과 파일({final_cover_letter_path})을 찾을 수 없습니다.")
+        logger.info(f"Task {task_id}: 자기소개서 생성 완료. 원본 길이: {len(raw_cover_letter)}, 포맷된 버전 길이: {len(formatted_cover_letter)}")
+        logger.info(f"Task {task_id}: 생성된 자기소개서 저장 완료: {final_cover_letter_path}")
 
-
+        self.update_state(state='SUCCESS', meta={'current_step': '완료', 'result_file': final_cover_letter_path, 'job_url': job_url})
+        logger.info(f"Task {task_id}: perform_processing 성공적으로 완료.")
         return {
-            "status": "SUCCESS", # Celery 표준은 SUCCESS/FAILURE
-            "message": "Cover letter generated successfully.",
-            "job_url": job_url,
-            "rag_file_used": rag_ready_file_name,
-            "raw_cover_letter": raw_cover_letter,
-            "formatted_cover_letter": formatted_cover_letter,
-            "generated_cover_letter_filename": cover_letter_filename if 'cover_letter_filename' in locals() else None, # 저장된 파일명도 결과에 추가
-            "user_story_preview": prompt_for_generation[:200] + "..." if prompt_for_generation else "N/A"
+            'status': 'SUCCESS',
+            'message': 'Cover letter generated successfully.',
+            'job_url': job_url,
+            'rag_file_used': os.path.basename(filtered_text_file_path) if filtered_text_file_path else "N/A",
+            'raw_cover_letter': raw_cover_letter,
+            'formatted_cover_letter': formatted_cover_letter,
+            'output_file_path': final_cover_letter_path,
+            'task_id': task_id
         }
 
-    except FileNotFoundError as e_fnf: # 변수명 변경
-        logger.error(f"Task {task_id}: perform_processing 중 FileNotFoundError 발생: {e_fnf}", exc_info=True)
-        self.update_state(state='FAILURE', meta={'exc_type': 'FileNotFoundError', 'exc_message': str(e_fnf)})
-        raise 
-    except ValueError as e_val: # 변수명 변경
-        logger.error(f"Task {task_id}: perform_processing 중 ValueError 발생: {e_val}", exc_info=True)
-        self.update_state(state='FAILURE', meta={'exc_type': 'ValueError', 'exc_message': str(e_val)})
-        raise
-    except RuntimeError as e_rt: # 변수명 변경
-        logger.error(f"Task {task_id}: perform_processing 중 RuntimeError 발생: {e_rt}", exc_info=True)
-        self.update_state(state='FAILURE', meta={'exc_type': 'RuntimeError', 'exc_message': str(e_rt)})
-        raise
-    except MaxRetriesExceededError as e_mre: # 변수명 변경
-        logger.error(f"Task {task_id}: Max retries exceeded for perform_processing: {e_mre}", exc_info=True)
-        # update_state는 Celery가 자동으로 처리할 수 있으므로, 여기서는 재발생만으로 충분할 수 있음.
-        # 단, 추가 정보를 meta에 담고 싶다면 여기서 update_state를 호출.
-        self.update_state(state='FAILURE', meta={'exc_type': 'MaxRetriesExceededError', 'exc_message': f"Max retries exceeded: {str(e_mre)}"})
-        raise # 최종 실패를 알림
-    except Exception as e_gen: # 변수명 변경, 가장 마지막에 위치
-        logger.error(f"Task {task_id}: perform_processing 중 예측하지 못한 예외 발생: {e_gen}", exc_info=True)
+    except FileNotFoundError as e_fnf:
+        error_occurred = True
+        error_message = f"파일 관련 오류: {str(e_fnf)}"
+        logger.error(f"Task {task_id}: FileNotFoundError in step {current_step} - {error_message}", exc_info=True)
+        self.update_state(state='FAILURE', meta={'current_step': current_step, 'error': error_message, 'job_url': job_url, 'task_id': task_id})
+    except ValueError as e_val:
+        error_occurred = True
+        error_message = f"값 관련 오류: {str(e_val)}"
+        logger.error(f"Task {task_id}: ValueError in step {current_step} - {error_message}", exc_info=True)
+        self.update_state(state='FAILURE', meta={'current_step': current_step, 'error': error_message, 'job_url': job_url, 'task_id': task_id})
+    except MaxRetriesExceededError as e_max_retries:
+        error_occurred = True
+        error_message = f"최대 재시도 횟수 초과: {str(e_max_retries)}"
+        logger.error(f"Task {task_id}: MaxRetriesExceededError in step {current_step} - {error_message}", exc_info=True)
+        # update_state는 Celery가 자동으로 처리할 수 있으므로 여기서는 로깅만 집중
+    except Exception as e_general:
+        error_occurred = True
+        error_message = f"예상치 못한 오류 발생: {str(e_general)}"
+        logger.error(f"Task {task_id}: Exception in step {current_step} - {error_message}", exc_info=True)
         try:
-            self.retry(exc=e_gen) # Celery의 내장 재시도 메커니즘 사용
-        except MaxRetriesExceededError as e_retry_max: # retry 호출 후 MaxRetriesExceededError
-            logger.error(f"Task {task_id}: Retry Succeeded by MaxRetriesExceededError for perform_processing: {e_retry_max}", exc_info=True)
-            self.update_state(state='FAILURE', meta={'exc_type': 'MaxRetriesExceededError', 'exc_message': f"Max retries exceeded after explicit retry: {str(e_retry_max)}"})
-            raise # 최종 실패를 알림
-        except Exception as e_retry_other: # retry 중 다른 예외 (거의 발생 안 함)
-             logger.error(f"Task {task_id}: Unexpected error during retry attempt for perform_processing: {e_retry_other}", exc_info=True)
-             self.update_state(state='FAILURE', meta={'exc_type': type(e_retry_other).__name__, 'exc_message': f"Unexpected error during retry: {str(e_retry_other)}"})
-             raise
+            # 재시도 로직: 현재 self.request.retries는 사용 불가 (apply().get() 사용 시)
+            # 대신 직접적인 재시도 로직을 구현하거나, 태스크 호출 방식을 변경해야 함.
+            # 여기서는 단순 실패 처리
+            self.update_state(state='FAILURE', meta={'current_step': current_step, 'error': error_message, 'job_url': job_url, 'task_id': task_id})
+        except Exception as retry_exc: # pragma: no cover
+            logger.error(f"Task {task_id}: Error during retry mechanism for {current_step}: {retry_exc}", exc_info=True)
+            # 최종 실패 상태 업데이트
+            self.update_state(state='FAILURE', meta={'current_step': current_step, 'error': f"General error, then retry mechanism failed: {error_message}, {retry_exc}", 'job_url': job_url, 'task_id': task_id})
+    finally:
+        if error_occurred:
+            logger.error(f"Task {task_id}: perform_processing 실패. 최종 단계: {current_step}, 오류: {error_message}")
+            # 실패 시 반환 값 명시 (Celery는 작업이 실패하면 예외를 전파하지만, 명시적 반환도 가능)
+            # raise Exception(error_message) # 이렇게 하면 Celery가 FAILURE로 처리
+            return {
+                'status': 'FAILURE',
+                'message': error_message,
+                'job_url': job_url,
+                'current_step': current_step,
+                'task_id': task_id
+            }
+        # 성공했지만 반환값이 없는 경우 (실제로는 위에서 성공 시 반환)
+        elif 'return' not in locals() and not error_occurred : # 성공적으로 끝났으나 명시적 return이 없는 경우 방지
+            logger.warning(f"Task {task_id}: Reached end of perform_processing without explicit success return. Forcing SUCCESS state.")
+            self.update_state(state='SUCCESS', meta={'current_step': 'COMPLETED_UNEXPECTEDLY', 'job_url': job_url, 'task_id': task_id})
+            return {
+                'status': 'SUCCESS',
+                'message': 'Processing completed, but final result structure might be incomplete.',
+                'job_url': job_url,
+                'task_id': task_id
+            }
 
 @celery_app.task(name='celery_tasks.extract_text_from_html_file')
 def extract_text_from_html_file(html_file_name: str):
@@ -577,32 +562,36 @@ def extract_text_from_html_file(html_file_name: str):
 
 @celery_app.task(name='celery_tasks.filter_job_posting_with_llm')
 def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name은 이제 순수 파일명
-    logger.info(f"Attempting to filter job posting with Groq LLM for file: {raw_text_file_name}")
-    
-    logs_dir = "logs"
-    raw_text_file_path = os.path.join(logs_dir, raw_text_file_name)
+    """
+    LLM (Groq)을 사용하여 원본 채용 공고 텍스트에서 관련 정보만 필터링합니다.
+    결과를 새로운 .txt 파일에 저장하고, 그 파일 경로를 반환합니다.
+    """
+    from langchain_groq import ChatGroq
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import StrOutputParser
 
-    # 파일명 생성 로직 (기존과 유사하게)
-    current_date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_name_without_ext = os.path.splitext(raw_text_file_name)[0]
-    if base_name_without_ext.startswith("text_content_from_html_"):
-        cleaned_base_name = base_name_without_ext.replace("text_content_from_html_", "")
+    logger.info(f"채용 공고 필터링 작업 시작: {raw_text_file_name}")
+    task_id = celery_app.current_task.request.id if celery_app.current_task else "N/A_filter_llm"
+
+    base_name = os.path.splitext(os.path.basename(raw_text_file_name))[0]
+    if base_name.startswith("text_content_from_html_"):
+        cleaned_base_name = base_name.replace("text_content_from_html_", "")
     else:
-        cleaned_base_name = base_name_without_ext
-    llm_filtered_file_name = f"llm_filtered_job_posting_{cleaned_base_name}_{current_date_str}.txt" # 파일명에 타임스탬프 추가하여 고유성 강화
-    llm_filtered_file_path = os.path.join(logs_dir, llm_filtered_file_name)
+        cleaned_base_name = base_name
+    llm_filtered_file_name = f"llm_filtered_job_posting_{cleaned_base_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    llm_filtered_file_path = os.path.join("logs", llm_filtered_file_name)
 
     filtered_text_content = ""
 
     try:
-        logger.info(f"Reading raw text file: {raw_text_file_path}")
-        if not os.path.exists(raw_text_file_path):
-            logger.error(f"Raw text file not found: {raw_text_file_path}")
-            raise FileNotFoundError(f"Raw text file not found: {raw_text_file_path}")
+        logger.info(f"Reading raw text file: {raw_text_file_name}")
+        if not os.path.exists(raw_text_file_name):
+            logger.error(f"Raw text file not found: {raw_text_file_name}")
+            raise FileNotFoundError(f"Raw text file not found: {raw_text_file_name}")
         
-        with open(raw_text_file_path, "r", encoding="utf-8") as f:
+        with open(raw_text_file_name, "r", encoding="utf-8") as f:
             raw_text_content = f.read()
-        logger.info(f"Successfully read raw text file: {raw_text_file_path}. Content length: {len(raw_text_content)}")
+        logger.info(f"Successfully read raw text file: {raw_text_file_name}. Content length: {len(raw_text_content)}")
         
         if not raw_text_content.strip():
             logger.warning(f"Raw text content for {raw_text_file_name} is empty or whitespace. Skipping LLM filtering.")
@@ -666,7 +655,7 @@ Here is the text to analyze:
                 logger.info(f"Groq LLM chain invocation complete. Raw output length: {len(filtered_text_content)}")
 
                 if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
-                    logger.warning("LLM returned empty or \'추출할 내용 없음\' response.")
+                    logger.warning("LLM returned empty or '추출할 내용 없음' response.")
                     filtered_text_content = "LLM 필터링 결과 내용 없음"
                 else:
                     logger.info("Successfully filtered text using Groq LLM.")
@@ -698,66 +687,169 @@ Here is the text to analyze:
 
 async def extract_body_html_with_playwright_and_iframe(url: str, task_id: str = "N/A") -> Optional[str]:
     """
-    Extracts the body HTML content from a given URL using Playwright,
-    handling potential iframes.
+    비동기 Playwright를 사용하여 지정된 URL의 <body> 내부 전체 HTML을 가져옵니다.
+    iframe 내부 컨텐츠를 재귀적으로 파싱하여 부모 HTML에 통합합니다.
+    성공 시 HTML 문자열을, 실패 시 None을 반환합니다.
     """
-    browser = None
-    page = None
+    logger.info(f"Task {task_id}: Async HTML extraction started for URL: {url}")
     try:
-        logger.info(f"Task {task_id}: Playwright를 사용하여 {url}에서 HTML 추출 시작.")
         async with async_playwright() as p:
-            logger.info(f"Task {task_id}: Playwright 브라우저 실행 시도 (Chromium).")
-            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
-            logger.info(f"Task {task_id}: Playwright 브라우저 실행 완료.")
-            page = await browser.new_page()
-            logger.info(f"Task {task_id}: 새 페이지 생성 완료. URL로 이동 시도: {url}")
-            await page.goto(url, wait_until="networkidle", timeout=60000)  # Increased timeout to 60 seconds
-            logger.info(f"Task {task_id}: URL로 이동 완료: {url}")
+            browser = None
+            try:
+                browser = await p.chromium.launch(headless=True)
+                logger.info(f"Task {task_id}: Playwright async browser launched: {browser.version}")
+            except Exception as browser_launch_error:
+                logger.error(f"Task {task_id}: Failed to launch async browser: {browser_launch_error}", exc_info=True)
+                return None
+            
+            page = None
+            try:
+                page = await browser.new_page()
+                logger.info(f"Task {task_id}: New page created.")
 
-            # iframe 내부의 body HTML 추출 시도
-            logger.info(f"Task {task_id}: iframe 탐색 및 처리 시도.")
-            iframes = await page.query_selector_all("iframe")
-            logger.info(f"Task {task_id}: {len(iframes)}개의 iframe을 찾았습니다.")
-            for i, iframe_element in enumerate(iframes):
+                # 리소스 로드 최적화: 이미지, CSS, 폰트 등 불필요한 리소스 차단
+                await page.route("**/*", lambda route: (
+                    route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media"] 
+                    else route.continue_()
+                ))
+                logger.info(f"Task {task_id}: Resource loading rules (image, stylesheet, font, media aborted) applied.")
+                
+                # 네트워크 요청 로깅 (옵션)
+                # page.on(\"request\", lambda request: logger.debug(f\"Request: {request.method} {request.url}\"))
+                # page.on(\"response\", lambda response: logger.debug(f\"Response: {response.status} {response.url}\"))
+
+                logger.info(f"Task {task_id}: Navigating to URL: {url}")
                 try:
-                    logger.info(f"Task {task_id}: {i+1}번째 iframe 처리 중...")
-                    iframe_content = await iframe_element.content_frame()
-                    if iframe_content:
-                        logger.info(f"Task {task_id}: {i+1}번째 iframe의 content frame을 가져왔습니다. HTML 추출 시도.")
-                        body_html = await iframe_content.inner_html("body")
-                        if body_html and body_html.strip():
-                            logger.info(f"Task {task_id}: {i+1}번째 iframe에서 body HTML 추출 성공 (길이: {len(body_html)}).")
-                            return body_html
-                        else:
-                            logger.warning(f"Task {task_id}: {i+1}번째 iframe의 body HTML이 비어있습니다.")
-                    else:
-                        logger.warning(f"Task {task_id}: {i+1}번째 iframe의 content frame을 가져올 수 없습니다.")
-                except Exception as e_iframe:
-                    logger.error(f"Task {task_id}: {i+1}번째 iframe 처리 중 오류 발생: {e_iframe}", exc_info=True)
-                    continue # 다음 iframe으로 넘어감
+                    await page.goto(url, timeout=60000, wait_until='domcontentloaded') # 타임아웃 60초, domcontentloaded까지 대기
+                    logger.info(f"Task {task_id}: Successfully navigated to URL: {url}")
+                except Exception as navigation_error:
+                    logger.error(f"Task {task_id}: Error navigating to URL {url}: {navigation_error}", exc_info=True)
+                    # 페이지 내용이라도 가져오도록 시도
+                    content_after_nav_error = await page.content()
+                    if content_after_nav_error:
+                        logger.warning(f"Task {task_id}: Content fetched after navigation error: {content_after_nav_error[:500]}...") # 처음 500자만 로깅
+                        # 여기서 추가 처리 (예: BeautifulSoup으로 파싱 시도) 가능
+                    return None # 또는 부분적인 내용이라도 반환할지 결정
 
-            # iframe이 없거나 iframe에서 HTML을 추출하지 못한 경우, 메인 페이지의 body HTML 추출
-            logger.info(f"Task {task_id}: 메인 페이지에서 body HTML 추출 시도.")
-            main_body_html = await page.inner_html("body")
-            logger.info(f"Task {task_id}: 메인 페이지 body HTML 추출 성공 (길이: {len(main_body_html)}).")
-            return main_body_html
+                logger.info(f"Task {task_id}: Starting iframe processing for URL: {url}")
+                await _async_flatten_iframes_in_live_dom(page, 0, MAX_IFRAME_DEPTH, url, task_id)
+                logger.info(f"Task {task_id}: Finished iframe processing for URL: {url}")
 
-    except TimeoutError as e_timeout:
-        logger.error(f"Task {task_id}: Playwright 작업 중 TimeoutError 발생 ({url}): {e_timeout}", exc_info=True)
+                # 최종적으로 body의 outerHTML을 가져옵니다 (iframe이 body 내부에 병합되었으므로).
+                body_element = await page.query_selector('body')
+                if body_element:
+                    full_body_html = await body_element.evaluate('element => element.outerHTML')
+                    logger.info(f"Task {task_id}: Successfully extracted body HTML. Length: {len(full_body_html)}")
+                    return full_body_html
+                else:
+                    logger.warning(f"Task {task_id}: <body> tag not found after iframe processing. Returning full page content. URL: {url}")
+                    # body가 없으면 전체 페이지 내용이라도 반환
+                    return await page.content()
+
+            except Exception as page_processing_error:
+                logger.error(f"Task {task_id}: Error processing page {url}: {page_processing_error}", exc_info=True)
+                if page: # 페이지 객체가 있다면 현재 내용이라도 로깅 시도
+                    try:
+                        current_content_on_error = await page.content()
+                        logger.info(f"Task {task_id}: Page content on error: {current_content_on_error[:500]}...")
+                    except Exception as content_log_error:
+                        logger.error(f"Task {task_id}: Failed to get page content during error handling: {content_log_error}")
+                return None
+            finally:
+                if page:
+                    try: await page.close()
+                    except Exception as e_pg_close: logger.warning(f"Task {task_id}: Error closing page: {e_pg_close}", exc_info=True)
+                if browser:
+                    try: await browser.close()
+                    except Exception as e_br_close: logger.warning(f"Task {task_id}: Error closing browser: {e_br_close}", exc_info=True)
+                logger.info(f"Task {task_id}: Playwright async resources released for URL: {url}")
+                
+    except Exception as outer_error:
+        logger.error(f"Task {task_id}: Outer error in async_extract_body_html: {outer_error}", exc_info=True)
         return None
-    except Exception as e:
-        logger.error(f"Task {task_id}: Playwright 작업 중 오류 발생 ({url}): {e}", exc_info=True)
-        return None
-    finally:
-        if page:
+
+async def _async_flatten_iframes_in_live_dom(current_playwright_context, # Playwright Page 또는 Frame 객체
+                                          current_depth: int,
+                                          max_depth: int,
+                                          original_page_url_for_logging: str,
+                                          task_id: str):
+    if current_depth > max_depth:
+        logger.warning(f"Task {task_id}: Max iframe depth {max_depth} reached for a frame within {original_page_url_for_logging} (context URL: {current_playwright_context.url if hasattr(current_playwright_context, 'url') else 'N/A'}). Stopping recursion for this branch.")
+        return
+
+    processed_iframe_count_at_this_level = 0
+    while True:
+        iframe_locator = current_playwright_context.locator('iframe:not([data-cvf-error="true"])').first
+        
+        try:
+            if await iframe_locator.count() == 0:
+                logger.info(f"Task {task_id}: No more processable iframes found at depth {current_depth} for {original_page_url_for_logging} (context URL: {current_playwright_context.url if hasattr(current_playwright_context, 'url') else 'N/A'}).")
+                break
+        except Exception as e_count:
+            logger.warning(f"Task {task_id}: Error checking iframe count at depth {current_depth} for {original_page_url_for_logging}: {e_count}. Assuming no iframes left.")
+            break
+
+        iframe_handle = None
+        try:
+            iframe_handle = await iframe_locator.element_handle(timeout=ELEMENT_HANDLE_TIMEOUT)
+            if not iframe_handle:
+                logger.warning(f"Task {task_id}: Located an iframe but could not get its element_handle at depth {current_depth} for {original_page_url_for_logging}. Breaking loop.")
+                break
+
+            processed_iframe_count_at_this_level += 1
+            iframe_src_for_log = (await iframe_handle.get_attribute('src')) or "[src not found]"
+            logger.info(f"Task {task_id}: Processing iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}) at depth {current_depth} (context URL: {current_playwright_context.url if hasattr(current_playwright_context, 'url') else 'N/A'}).")
+
+            child_frame = await iframe_handle.content_frame()
+            
+            if not child_frame:
+                logger.warning(f"Task {task_id}: Could not get content_frame for iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}). Marking and skipping.")
+                await iframe_handle.evaluate("el => el.setAttribute('data-cvf-error', 'true')")
+                continue
+
+            await _async_flatten_iframes_in_live_dom(child_frame, current_depth + 1, max_depth, original_page_url_for_logging, task_id)
+            
+            child_frame_html_content = ""
             try:
-                await page.close()
-                logger.info(f"Task {task_id}: Playwright 페이지를 닫았습니다.")
-            except Exception as e_close_page:
-                logger.error(f"Task {task_id}: Playwright 페이지 닫기 중 오류: {e_close_page}", exc_info=True)
-        if browser:
+                await child_frame.wait_for_load_state('domcontentloaded', timeout=IFRAME_LOAD_TIMEOUT)
+                child_frame_html_content = await child_frame.content()
+            except Exception as frame_content_err:
+                logger.error(f"Task {task_id}: Error getting content from child_frame (URL: {child_frame.url}, src: {iframe_src_for_log[:100]}, depth: {current_depth + 1}): {frame_content_err}", exc_info=True)
+                await iframe_handle.evaluate("el => el.setAttribute('data-cvf-error', 'true')")
+                continue
+            
+            replacement_html_string = ""
+            if not child_frame_html_content:
+                logger.warning(f"Task {task_id}: Child frame (URL: {child_frame.url}, src: {iframe_src_for_log[:100]}, depth: {current_depth + 1}) returned empty content.")
+                replacement_html_string = f"<!-- Iframe (src: {iframe_src_for_log[:200]}) content was empty -->"
+            else:
+                try:
+                    child_soup = BeautifulSoup(child_frame_html_content, 'html.parser')
+                    content_to_insert_bs = child_soup.body if child_soup.body else child_soup
+                    replacement_html_string = content_to_insert_bs.prettify() if content_to_insert_bs else f"<!-- Iframe (src: {iframe_src_for_log[:200]}) content could not be prettified -->"
+                except Exception as bs_parse_err:
+                    logger.error(f"Task {task_id}: Error parsing/prettifying child frame content (URL: {child_frame.url}, src: {iframe_src_for_log[:100]}): {bs_parse_err}", exc_info=True)
+                    replacement_html_string = f"<!-- Error processing iframe content (src: {iframe_src_for_log[:200]}): {str(bs_parse_err)}. Raw content snippet: {child_frame_html_content[:200]} -->"
+
             try:
-                await browser.close()
-                logger.info(f"Task {task_id}: Playwright 브라우저를 닫았습니다.")
-            except Exception as e_close_browser:
-                logger.error(f"Task {task_id}: Playwright 브라우저 닫기 중 오류: {e_close_browser}", exc_info=True) 
+                logger.info(f"Task {task_id}: Attempting to replace iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}) with its content at depth {current_depth}.")
+                await iframe_handle.evaluate("function(el, html) { el.outerHTML = html; }", replacement_html_string)
+                logger.info(f"Task {task_id}: Successfully replaced iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}) at depth {current_depth}.")
+            except Exception as eval_error:
+                logger.error(f"Task {task_id}: Failed to replace iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}) in DOM: {eval_error}", exc_info=True)
+                try: await iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true') }")
+                except Exception as mark_err: logger.error(f"Task {task_id}: Failed to mark iframe as error after eval failed: {mark_err}", exc_info=True)
+        
+        except Exception as e:
+            logger.error(f"Task {task_id}: Outer error processing an iframe at depth {current_depth} for {original_page_url_for_logging}: {e}", exc_info=True)
+            if iframe_handle:
+                try: await iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true') }")
+                except: pass
+            logger.warning(f"Task {task_id}: Breaking iframe processing loop at depth {current_depth} due to an error.")
+            break
+        finally:
+            if iframe_handle:
+                try: await iframe_handle.dispose()
+                except: pass
+    
+    logger.info(f"Task {task_id}: Finished iframe processing at depth {current_depth} for {original_page_url_for_logging}. Processed {processed_iframe_count_at_this_level} direct iframe(s) at this level.") 
