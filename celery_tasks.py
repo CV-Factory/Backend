@@ -609,40 +609,21 @@ def filter_job_posting_with_llm(raw_text_file_name: str): # raw_text_file_name�
             try:
                 logger.info("Initializing Groq Chat LLM (meta-llama/llama-4-maverick-17b-128e-instruct)...")
                 model = ChatGroq(
-                    temperature=0.1, 
-                    groq_api_key=groq_api_key,
-                    model_name="meta-llama/llama-4-maverick-17b-128e-instruct", 
-                    max_tokens=8000 
+                    temperature=0,
+                    model_name="meta-llama/llama-4-maverick-17b-128e-instruct", # 모델명 변경
+                    # groq_api_key="YOUR_GROQ_API_KEY" # .env 또는 환경변수로 설정 권장
                 )
-                logger.info("Groq Chat LLM initialized successfully.")
+                logger.info("Groq Chat LLM model initialized.")
 
-                prompt_template_str = """You are an expert assistant that extracts only the core job posting content from the given text. 
-Your goal is to identify and isolate the actual job advertisement.
-Carefully review the entire text provided.
-Extract ONLY the following sections if present:
-- Job Title
-- Company Name (if clearly part of the posting)
-- Job Description / Responsibilities
-- Qualifications / Requirements (skills, experience, education)
-- Preferred Qualifications (if any)
-- What the company offers / Benefits (if specifically listed for the job)
-- Location
-- How to Apply (if mentioned as part of the posting itself, not general site instructions)
+                # 프롬프트 템플릿 정의
+                prompt_template_str = """당신은 텍스트에서 채용 공고 내용만 정확하게 추출하는 전문가입니다. 
+주어진 텍스트에서 다른 모든 내용을 제거하고 오직 채용 공고와 직접적으로 관련된 내용만 남겨주세요.
+만약 텍스트에 채용 공고 내용이 포함되어 있지 않거나, 너무 손상되어 채용 공고라고 보기 어렵다면, 다른 어떤 설명도 없이 정확히 '추출할 내용 없음' 이라고만 응답해주세요.
+"채용 공고 내용은 다음과 같습니다:" 와 같은 도입부나 설명은 추가하지 마세요. 추출된 텍스트 또는 '추출할 내용 없음'만 제공하세요.
 
-IGNORE everything else, including but not limited to:
-- Website navigation elements (menus, links, headers, footers)
-- Advertisements for other jobs or services
-- Cookie consent banners
-- General company promotional text not tied to this specific job
-- User comments or discussions
-- Irrelevant metadata or timestamps
-
-If the text does not appear to contain a job posting, or if the content is too garbled to be a job posting, respond with the exact phrase '추출할 내용 없음' and nothing else.
-Do not add any introductory phrases like "Here is the job posting content:" or any explanations. Just provide the extracted text or '추출할 내용 없음'.
-
-Here is the text to analyze:
+분석할 텍스트:
 {text_input}
-                            """
+                        """
                 
                 prompt = ChatPromptTemplate.from_template(prompt_template_str)
                 
@@ -654,9 +635,9 @@ Here is the text to analyze:
                 filtered_text_content = chain.invoke({"text_input": raw_text_content})
                 logger.info(f"Groq LLM chain invocation complete. Raw output length: {len(filtered_text_content)}")
 
-                    if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
+                if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
                     logger.warning("LLM returned empty or '추출할 내용 없음' response.")
-                        filtered_text_content = "LLM 필터링 결과 내용 없음"
+                    filtered_text_content = "LLM 필터링 결과 내용 없음"
                 else:
                     logger.info("Successfully filtered text using Groq LLM.")
                     logger.debug(f"Filtered text (first 300 chars): {filtered_text_content[:300]}")
@@ -837,19 +818,23 @@ async def _async_flatten_iframes_in_live_dom(current_playwright_context, # Playw
                 logger.info(f"Task {task_id}: Successfully replaced iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}) at depth {current_depth}.")
             except Exception as eval_error:
                 logger.error(f"Task {task_id}: Failed to replace iframe #{processed_iframe_count_at_this_level} (src: {iframe_src_for_log[:100]}) in DOM: {eval_error}", exc_info=True)
-                try: await iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true') }")
-                except Exception as mark_err: logger.error(f"Task {task_id}: Failed to mark iframe as error after eval failed: {mark_err}", exc_info=True)
+                try:
+                    await iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true') }")
+                except Exception as mark_err:
+                    logger.error(f"Task {task_id}: Failed to mark iframe as error after eval failed: {mark_err}", exc_info=True)
         
-    except Exception as e:
+        except Exception as e:
             logger.error(f"Task {task_id}: Outer error processing an iframe at depth {current_depth} for {original_page_url_for_logging}: {e}", exc_info=True)
             if iframe_handle:
-                try: await iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true') }")
+                try:
+                    await iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true') }")
                 except: pass
             logger.warning(f"Task {task_id}: Breaking iframe processing loop at depth {current_depth} due to an error.")
             break
         finally:
             if iframe_handle:
-                try: await iframe_handle.dispose()
+                try:
+                    await iframe_handle.dispose()
                 except: pass
     
     logger.info(f"Task {task_id}: Finished iframe processing at depth {current_depth} for {original_page_url_for_logging}. Processed {processed_iframe_count_at_this_level} direct iframe(s) at this level.") 
