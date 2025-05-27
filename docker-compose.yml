@@ -19,4 +19,4 @@ services:
       - PYTHONUNBUFFERED=1
     command: ["./entrypoint.sh", "worker"]
 
-volumes: 
+volumes:

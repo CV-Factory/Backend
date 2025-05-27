@@ -665,9 +665,9 @@ Here is the text to analyze:
                 filtered_text_content = chain.invoke({"text_input": raw_text_content})
                 logger.info(f"Groq LLM chain invocation complete. Raw output length: {len(filtered_text_content)}")
 
-                if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
+                    if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
                     logger.warning("LLM returned empty or '추출할 내용 없음' response.")
-                    filtered_text_content = "LLM 필터링 결과 내용 없음"
+                        filtered_text_content = "LLM 필터링 결과 내용 없음"
                 else:
                     logger.info("Successfully filtered text using Groq LLM.")
                     logger.debug(f"Filtered text (first 300 chars): {filtered_text_content[:300]}")
@@ -675,7 +675,7 @@ Here is the text to analyze:
             except Exception as e_groq:
                 logger.error(f"Error during Groq LLM call for {raw_text_file_name}: {e_groq}", exc_info=True)
                 filtered_text_content = f"LLM API 호출 중 오류 발생: {str(e_groq)}"
-        
+
         logger.info(f"Writing filtered content to: {llm_filtered_file_path}")
         with open(llm_filtered_file_path, "w", encoding="utf-8") as f:
             f.write(filtered_text_content)
