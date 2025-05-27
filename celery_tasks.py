@@ -95,9 +95,9 @@ def _update_root_task_state(task_id: str, current_step_message: str, status: str
         if error_info:
             meta_update['error_details'] = error_info
         
-        # status가 PENDING (기본값)이 아닌 경우에만 명시적으로 설정, 그 외에는 celery_app.backend.store_result의 기본 동작에 맡김
-        # 다만, Celery의 기본 상태 외에 SUCCESS, FAILURE 등 명확한 상태를 전달해야 함.
-        # STARTED는 Celery의 표준 상태 중 하나.
+        # meta_update 내용을 로깅
+        logger.info(f"[StateUpdateMeta] Root task {task_id} - meta_update content before storing: {meta_update}")
+
         current_status = status
         if status not in [states.SUCCESS, states.FAILURE, states.RETRY, states.REVOKED, states.STARTED]:
             # PROGRESS와 같은 사용자 정의 상태 대신 STARTED를 사용하고, details에 진행 상황 명시
