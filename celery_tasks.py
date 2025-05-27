@@ -709,8 +709,6 @@ def process_job_posting_pipeline(self, url: str, user_prompt: Optional[str] = No
         chain_async_result = processing_chain_final.apply_async()
         
         logger.info(f"{log_prefix} Dispatched chain. Last task ID in chain: {chain_async_result.id}. Polling root ID: {root_task_id}")
-        _update_root_task_state(root_task_id, "파이프라인 작업들 실행 중", 
-                                details={'chain_last_task_id': chain_async_result.id, 'status_polling_id': root_task_id})
         
         # 이 태스크는 체인을 시작시키고, 클라이언트가 폴링할 루트 작업 ID를 반환.
         return root_task_id
