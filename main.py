@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from typing import Any
-from celery_tasks import process_job_pipeline
+from celery_tasks import process_job_posting_pipeline
 from celery.result import AsyncResult
 import time
 import traceback
@@ -103,7 +103,7 @@ async def start_processing_task(request: ProcessRequest):
         log_message_prefix += f", Prompt='{request.prompt}'"
     logger.info(log_message_prefix)
     try:
-        task = process_job_pipeline.delay(url=request.job_url, user_prompt=request.prompt)
+        task = process_job_posting_pipeline.delay(url=request.job_url, user_prompt=request.prompt)
         logger.info(f"Celery 작업 파이프라인 시작됨. Root Task ID: {task.id}")
         return TaskStatusResponse(task_id=task.id, status="PENDING", current_step="Pipeline Initiated")
     except Exception as e:

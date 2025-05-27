@@ -86,7 +86,7 @@ def sanitize_filename(url_or_name: str, extension: str = "", ensure_unique: bool
         logger.warning(f"Returning error-fallback filename: {error_name}")
         return error_name
 
-def _update_root_task_state(task_id: str, current_step_message: str, status: str = states.PROGRESS, details: Optional[Dict[str, Any]] = None, error_info: Optional[Dict[str, Any]] = None):
+def _update_root_task_state(task_id: str, current_step_message: str, status: str = states.STARTED, details: Optional[Dict[str, Any]] = None, error_info: Optional[Dict[str, Any]] = None):
     """루트 작업의 상태를 업데이트하는 헬퍼 함수."""
     try:
         meta_update = {'current_step': current_step_message}
@@ -95,8 +95,17 @@ def _update_root_task_state(task_id: str, current_step_message: str, status: str
         if error_info:
             meta_update['error_details'] = error_info
         
-        celery_app.backend.store_result(task_id, None, status, meta=meta_update)
-        logger.info(f"[StateUpdate] Root task {task_id} status: {status}, step: '{current_step_message}', details: {meta_update.get('details', 'N/A')}, error: {error_info or 'N/A'}")
+        # status가 PENDING (기본값)이 아닌 경우에만 명시적으로 설정, 그 외에는 celery_app.backend.store_result의 기본 동작에 맡김
+        # 다만, Celery의 기본 상태 외에 SUCCESS, FAILURE 등 명확한 상태를 전달해야 함.
+        # STARTED는 Celery의 표준 상태 중 하나.
+        current_status = status
+        if status not in [states.SUCCESS, states.FAILURE, states.RETRY, states.REVOKED, states.STARTED]:
+            # PROGRESS와 같은 사용자 정의 상태 대신 STARTED를 사용하고, details에 진행 상황 명시
+            logger.warning(f"Invalid or custom status '{status}' provided for task {task_id}. Defaulting to STARTED or relying on details. Message: {current_step_message}")
+            current_status = states.STARTED # 혹은 기존 상태를 유지하거나 다른 표준 상태로 매핑
+
+        celery_app.backend.store_result(task_id, None, current_status, meta=meta_update)
+        logger.info(f"[StateUpdate] Root task {task_id} status: {current_status}, step: '{current_step_message}', details: {meta_update.get('details', 'N/A')}, error: {error_info or 'N/A'}")
     except Exception as e_update:
         logger.error(f"[StateUpdateFailure] Failed to update root task {task_id} state: {e_update}", exc_info=True)
 
@@ -132,6 +141,7 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
         return
 
     processed_iframe_count = 0
+    # iframe을 찾되, 이미 처리했거나 오류가 발생한 iframe은 제외
     iframe_locators = current_playwright_context.locator('iframe:not([data-cvf-processed="true"]):not([data-cvf-error="true"])')
     
     try:
@@ -147,88 +157,150 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
     for i in range(num_iframes):
         iframe_locator = iframe_locators.nth(i)
         iframe_handle = None
-        iframe_log_id = f"iframe-{uuid.uuid4().hex[:6]}"
+        # 각 iframe에 고유 ID 부여 시도 (로깅 및 추적 용이)
+        iframe_log_id = f"iframe-gen-{uuid.uuid4().hex[:6]}" 
         
         try:
+            # iframe ID 가져오기 또는 설정 (오류 발생 가능성 있음)
             try:
                 existing_id = iframe_locator.get_attribute('id')
-                iframe_log_id = existing_id if existing_id else iframe_log_id
-                if not existing_id: iframe_locator.evaluate("(el, id) => el.id = id", iframe_log_id)
+                if existing_id:
+                    iframe_log_id = existing_id
+                else:
+                    # ID가 없다면 새로 생성하여 설정
+                    iframe_locator.evaluate("(el, id) => el.id = id", iframe_log_id)
             except Exception as e_set_id:
-                logger.warning(f"{log_prefix} Could not set/get ID for iframe: {e_set_id}. Using generated: {iframe_log_id}")
+                logger.warning(f"{log_prefix} Could not reliably set/get ID for iframe #{i+1}. Using generated: {iframe_log_id}. Error: {e_set_id}")
 
-            logger.info(f"{log_prefix} Processing iframe #{i+1}/{num_iframes} (ID: {iframe_log_id}).")
+            logger.info(f"{log_prefix} Processing iframe #{i+1}/{num_iframes} (Effective ID: {iframe_log_id}).")
+            # 현재 처리 중인 iframe임을 DOM에 표시
             iframe_locator.evaluate("el => el.setAttribute('data-cvf-processing', 'true')")
 
             iframe_handle = iframe_locator.element_handle(timeout=ELEMENT_HANDLE_TIMEOUT)
-            if not iframe_handle: 
-                logger.warning(f"{log_prefix} Null element_handle for iframe {iframe_log_id}. Marking error.")
+            if not iframe_handle:
+                logger.warning(f"{log_prefix} Null element_handle for iframe {iframe_log_id}. Marking with error and skipping.")
                 iframe_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
                 continue
-            
-            iframe_src = iframe_handle.get_attribute('src') or "[src not found]"
-            logger.debug(f"{log_prefix} iframe {iframe_log_id} src: {iframe_src[:100]}")
+
+            iframe_src_attr = iframe_handle.get_attribute('src') or "[src attribute not found]"
+            logger.debug(f"{log_prefix} iframe {iframe_log_id} src attribute: {iframe_src_attr[:150]}")
 
             child_frame = iframe_handle.content_frame()
             if not child_frame: 
-                logger.warning(f"{log_prefix} content_frame is None for {iframe_log_id}. Marking error.")
+                logger.warning(f"{log_prefix} content_frame is None for iframe {iframe_log_id}. Marking with error and skipping.")
                 iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
                 continue
             
+            child_frame_url_for_log = "[child frame URL not accessible]"
             try:
-                logger.info(f"{log_prefix} Waiting for child_frame (ID: {iframe_log_id}, URL: {child_frame.url}) to load...")
+                child_frame_url_for_log = child_frame.url # 로드 전에 URL 접근 시도
+            except Exception:
+                pass
+
+            try:
+                logger.info(f"{log_prefix} Waiting for child_frame (ID: {iframe_log_id}, URL: {child_frame_url_for_log}) to load (domcontentloaded)...")
                 child_frame.wait_for_load_state('domcontentloaded', timeout=IFRAME_LOAD_TIMEOUT) 
-                logger.info(f"{log_prefix} Child_frame (ID: {iframe_log_id}) loaded.")
+                logger.info(f"{log_prefix} Child_frame (ID: {iframe_log_id}, Final URL: {child_frame.url}) loaded.")
             except Exception as frame_load_err:
-                logger.error(f"{log_prefix} Timeout/error loading child_frame {iframe_log_id} (src: {iframe_src[:100]}): {frame_load_err}", exc_info=True)
+                logger.error(f"{log_prefix} Timeout or error loading child_frame {iframe_log_id} (src attr: {iframe_src_attr[:100]}, initial URL: {child_frame_url_for_log}): {frame_load_err}", exc_info=True)
                 iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
                 continue
 
+            # --- 재귀 호출 ---
             _flatten_iframes_in_live_dom_sync(child_frame, current_depth + 1, max_depth, original_page_url_for_logging, chain_log_id, step_log_id)
+            # --- 재귀 호출 끝 ---
             
-            child_html = ""
+            child_html_content = ""
             try:
                 logger.debug(f"{log_prefix} Getting content from child_frame {iframe_log_id} post-recursion.")
-                child_html = child_frame.content()
-                if not child_html: child_html = f"<!-- iframe {iframe_log_id} content empty -->"
+                child_html_content = child_frame.content() # 여기서도 타임아웃 또는 오류 발생 가능
+                if not child_html_content: 
+                    child_html_content = f"<!-- iframe {iframe_log_id} (src: {iframe_src_attr[:100]}) content was empty post-recursion -->"
             except Exception as frame_content_err:
-                logger.error(f"{log_prefix} Error getting content from child_frame {iframe_log_id}: {frame_content_err}", exc_info=True)
+                logger.error(f"{log_prefix} Error getting content from child_frame {iframe_log_id} (src: {iframe_src_attr[:100]}): {frame_content_err}", exc_info=True)
                 iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
-                continue 
-            
-            replacement_html = ""
+                continue # 이 iframe 처리는 실패로 간주하고 다음으로
+
+            # iframe 내용을 div로 감싸서 교체할 HTML 생성
+            replacement_div_html = ""
             try:
-                soup = BeautifulSoup(child_html, 'html.parser')
-                content_to_insert = soup.body if soup.body else soup
-                inner_html = content_to_insert.decode_contents() if content_to_insert else f"<!-- Parsed {iframe_log_id} empty -->"
-                replacement_html = f'<div class="cvf-iframe-content-wrapper" data-cvf-original-src="{iframe_src[:250]}" data-cvf-iframe-depth="{current_depth + 1}" data-cvf-iframe-id="{iframe_log_id}">{inner_html}</div>'
+                soup = BeautifulSoup(child_html_content, 'html.parser')
+                # body가 있으면 body 내부, 없으면 전체 HTML을 사용
+                content_to_insert = soup.body if soup.body else soup 
+                inner_html_str = content_to_insert.decode_contents() if content_to_insert else f"<!-- Parsed content of {iframe_log_id} was empty -->"
+                
+                # XSS 방지를 위해 src 속성 등을 적절히 이스케이프하거나 제한된 정보만 포함하는 것이 좋으나, 여기서는 원본 추적용으로만 사용
+                safe_original_src = (iframe_src_attr[:250] + '...') if len(iframe_src_attr) > 250 else iframe_src_attr
+                
+                replacement_div_html = (
+                    f'<div class="cvf-iframe-content-wrapper" '
+                    f'data-cvf-original-src="{safe_original_src}" '
+                    f'data-cvf-iframe-depth="{current_depth + 1}" '
+                    f'data-cvf-iframe-id="{iframe_log_id}">'
+                    f'{inner_html_str}'
+                    f'</div>'
+                )
             except Exception as bs_err:
-                logger.error(f"{log_prefix} Error parsing child frame {iframe_log_id}: {bs_err}", exc_info=True)
-                replacement_html = f'<div class="cvf-iframe-content-wrapper cvf-error" data-cvf-original-src="{iframe_src[:250]}" data-cvf-iframe-id="{iframe_log_id}"><!-- Error parsing: {str(bs_err)}. Raw: {child_html[:200]} --></div>'
+                logger.error(f"{log_prefix} Error parsing child frame {iframe_log_id} with BeautifulSoup: {bs_err}", exc_info=True)
+                safe_original_src = (iframe_src_attr[:250] + '...') if len(iframe_src_attr) > 250 else iframe_src_attr
+                replacement_div_html = (
+                    f'<div class="cvf-iframe-content-wrapper cvf-parse-error" '
+                    f'data-cvf-original-src="{safe_original_src}" '
+                    f'data-cvf-iframe-id="{iframe_log_id}">'
+                    f'<!-- Error parsing content of iframe {iframe_log_id}. Original content snippet: {child_html_content[:200]}... -->'
+                    f'</div>'
+                )
             
+            # iframe을 생성된 div HTML로 교체
             try:
-                logger.info(f"{log_prefix} Replacing iframe {iframe_log_id} with content.")
-                iframe_handle.evaluate("(el, html) => { el.outerHTML = html; }", replacement_html)
-                logger.info(f"{log_prefix} Replaced iframe {iframe_log_id}.")
+                logger.info(f"{log_prefix} Attempting to replace iframe {iframe_log_id} with its content.")
+                iframe_handle.evaluate("(el, html) => { el.outerHTML = html; }", replacement_div_html)
+                logger.info(f"{log_prefix} Successfully replaced iframe {iframe_log_id} with div wrapper.")
                 processed_iframe_count += 1
-            except Exception as eval_err:
-                logger.error(f"{log_prefix} Failed to replace iframe {iframe_log_id}: {eval_err}", exc_info=True)
-                # 시도 후에도 iframe이 남아있을 수 있으므로, data-cvf-error 마킹 시도
+            except Exception as eval_replace_err: 
+                logger.error(f"{log_prefix} Failed to replace iframe {iframe_log_id} using evaluate: {eval_replace_err}", exc_info=True)
+                # 교체 실패 시, 원본 iframe에 에러 상태만 마킹 (이미 data-cvf-processing 상태일 것임)
+                # 이 시점에서 iframe_handle이 여전히 유효한지 확인 필요. 이미 DOM에서 제거되었을 수도.
+                # locator를 사용해 다시 찾아 마킹 시도
                 if current_playwright_context.locator(f'iframe[id="{iframe_log_id}"][data-cvf-processing="true"]').count() == 1:
                     current_playwright_context.locator(f'iframe[id="{iframe_log_id}"]').evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
-        
-        except Exception as e_iframe_loop:
-            logger.error(f"{log_prefix} Loop error for iframe {iframe_log_id}: {e_iframe_loop}", exc_info=True)
-            if iframe_handle: # 핸들이 아직 유효하면 에러 마킹
-                 try: iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
-                 except: pass 
-            continue
-        finally:
-            if iframe_handle: 
-                try: iframe_handle.dispose()
-                except Exception as e_dispose: logger.warning(f"{log_prefix} Error disposing handle for {iframe_log_id}: {e_dispose}", exc_info=True)
+                else:
+                    logger.warning(f"{log_prefix} iframe {iframe_log_id} not found for error marking after replacement failure.")
 
-    logger.info(f"{log_prefix} Finished iframe processing at depth {current_depth}. Processed {processed_iframe_count} iframe(s).")
+        except Exception as e_outer_iframe_loop: 
+            # 이 블록은 개별 iframe 처리의 전체 과정을 감싸는 try문의 except
+            logger.error(f"{log_prefix} General error processing iframe {iframe_log_id} (loop iteration #{i+1}): {e_outer_iframe_loop}", exc_info=True)
+            # iframe_handle이 존재하고, 아직 처리 중(data-cvf-processing)이라면 에러 마킹 시도
+            if iframe_handle: 
+                try: 
+                    # 핸들이 유효하다면 직접 사용
+                    if not iframe_handle.is_hidden(): # DOM에 아직 존재하는지 확인 (최선은 아님)
+                         iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                except Exception as e_final_mark_err:
+                    logger.warning(f"{log_prefix} Error during final attempt to mark iframe {iframe_log_id} as error in outer_iframe_loop: {e_final_mark_err}")
+            # 다음 iframe 처리를 위해 continue
+            continue 
+        finally:
+            # 각 iframe 처리 후 핸들 정리
+            if iframe_handle:
+                try: 
+                    iframe_handle.dispose()
+                except Exception as e_dispose: 
+                    logger.warning(f"{log_prefix} Error disposing element_handle for iframe {iframe_log_id}: {e_dispose}", exc_info=True)
+            # 처리 중이던 상태(data-cvf-processing)가 남아있다면, 완료 또는 에러 상태로 변경해야 함.
+            # locator로 다시 찾아, 만약 아직 processing 상태라면 error로 변경 (최후의 수단)
+            # 단, 성공적으로 교체된 경우는 locator로 찾을 수 없음.
+            try:
+                remaining_iframe_locator = current_playwright_context.locator(f'iframe[id="{iframe_log_id}"][data-cvf-processing="true"]')
+                if remaining_iframe_locator.count() == 1:
+                    logger.warning(f"{log_prefix} iframe {iframe_log_id} was left in 'processing' state. Marking as error.")
+                    remaining_iframe_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+            except Exception as e_final_cleanup_locator:
+                 logger.warning(f"{log_prefix} Error during final cleanup check for iframe {iframe_log_id}: {e_final_cleanup_locator}")
+
+
+    logger.info(f"{log_prefix} Finished all iframe processing at depth {current_depth}. Total iframes found at this depth: {num_iframes}. Successfully processed/replaced: {processed_iframe_count}.")
+
 
 @celery_app.task(bind=True, name='celery_tasks.step_1_extract_html', max_retries=1, default_retry_delay=10)
 def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
@@ -321,8 +393,8 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
             except IOError as e_io_save:
                 logger.error(f"{log_prefix} Failed to save HTML to {saved_file_path}: {e_io_save}", exc_info=True)
                 _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 파일 저장 실패", status=states.FAILURE, error_info={'error': str(e_io_save), 'file_path': saved_file_path})
-                raise
-            
+        raise
+
             return {"html_file_path": saved_file_path, "original_url": url}
 
     except Exception as e: # Playwright 블록 내의 모든 예외 포함
@@ -599,7 +671,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         }
         _update_root_task_state(chain_log_id, "파이프라인 성공적으로 완료", status=states.SUCCESS, details=final_pipeline_result)
         return final_pipeline_result # 이것이 체인의 최종 결과가 됨
-
+        
     except Exception as e:
         logger.error(f"{log_prefix} Error in cover letter generation: {e}", exc_info=True)
         if cover_letter_file_path_final and os.path.exists(cover_letter_file_path_final):
