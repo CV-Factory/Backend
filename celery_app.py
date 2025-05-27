@@ -16,8 +16,8 @@ LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 
 if UPSTASH_REDIS_PASSWORD and UPSTASH_REDIS_ENDPOINT and UPSTASH_REDIS_PORT:
     # Cloud Run 환경 또는 Upstash 정보가 모두 제공된 경우
-    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}"
-    logger.info("Using Upstash Redis for Celery (rediss basic URL).")
+    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}?ssl_cert_reqs=none"
+    logger.info("Using Upstash Redis for Celery with ssl_cert_reqs=none.")
 else:
     # 로컬 환경 또는 Upstash 정보가 불완전한 경우 (기존 로컬 Redis 또는 REDIS_URL 사용)
     FINAL_REDIS_URL = LOCAL_REDIS_URL
