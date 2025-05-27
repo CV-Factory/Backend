@@ -390,12 +390,13 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
                     f.write(html_content)
                 logger.info(f"{log_prefix} HTML content saved to: {saved_file_path}")
                 _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 파일 저장 완료", details={'html_file_path': saved_file_path})
+                # 성공적으로 저장했으므로 결과를 반환합니다.
+                return {"html_file_path": saved_file_path, "original_url": url}
+
             except IOError as e_io_save:
                 logger.error(f"{log_prefix} Failed to save HTML to {saved_file_path}: {e_io_save}", exc_info=True)
                 _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 파일 저장 실패", status=states.FAILURE, error_info={'error': str(e_io_save), 'file_path': saved_file_path})
-        raise
-
-            return {"html_file_path": saved_file_path, "original_url": url}
+                raise # IOError 발생 시 현재 태스크를 실패 처리
 
     except Exception as e: # Playwright 블록 내의 모든 예외 포함
         logger.error(f"{log_prefix} Unhandled error in HTML extraction: {e}", exc_info=True)
