@@ -350,7 +350,7 @@ def perform_processing(self, job_url: str, prompt: str, job_site_name: str = "un
     current_step = "INITIALIZING"
 
     try:
-        self.update_state(state='PROGRESS', meta={'current_step': '채용 공고 HTML 추출 중...', 'job_url': job_url})
+        self.update_state(state='STARTED', meta={'current_step': '채용 공고 HTML 추출 중...', 'job_url': job_url})
         current_step = "HTML_EXTRACTION"
         logger.info(f"Task {task_id}: HTML 추출 시작 - extract_body_html_from_url 호출")
         extracted_html_file_path = extract_body_html_from_url.s(url=job_url).apply(task_id=f"{task_id}_html").get(timeout=1800) # 30분 타임아웃
@@ -358,7 +358,7 @@ def perform_processing(self, job_url: str, prompt: str, job_site_name: str = "un
             raise FileNotFoundError(f"HTML 추출 실패 또는 파일({extracted_html_file_path})을 찾을 수 없습니다.")
         logger.info(f"Task {task_id}: HTML 추출 완료. 파일 경로: {extracted_html_file_path}")
 
-        self.update_state(state='PROGRESS', meta={'current_step': 'HTML에서 텍스트 추출 중...', 'html_file': extracted_html_file_path})
+        self.update_state(state='STARTED', meta={'current_step': 'HTML에서 텍스트 추출 중...', 'html_file': extracted_html_file_path})
         current_step = "TEXT_EXTRACTION"
         logger.info(f"Task {task_id}: 텍스트 추출 시작 - extract_text_from_html_file 호출")
         # s()를 사용하여 subtask 시그니처를 만들고, task_id를 지정하여 apply_async 대신 apply().get()으로 동기적 실행
@@ -369,7 +369,7 @@ def perform_processing(self, job_url: str, prompt: str, job_site_name: str = "un
             raise FileNotFoundError(f"텍스트 추출 실패 또는 파일({raw_text_file_path})을 찾을 수 없습니다.")
         logger.info(f"Task {task_id}: 텍스트 추출 완료. 파일 경로: {raw_text_file_path}")
 
-        self.update_state(state='PROGRESS', meta={'current_step': 'LLM으로 채용 공고 필터링 중...', 'raw_text_file': raw_text_file_path})
+        self.update_state(state='STARTED', meta={'current_step': 'LLM으로 채용 공고 필터링 중...', 'raw_text_file': raw_text_file_path})
         current_step = "LLM_FILTERING"
         logger.info(f"Task {task_id}: LLM 필터링 시작 - filter_job_posting_with_llm 호출")
         # filter_job_posting_with_llm도 Celery 작업으로 가정
@@ -378,7 +378,7 @@ def perform_processing(self, job_url: str, prompt: str, job_site_name: str = "un
             raise FileNotFoundError(f"LLM 필터링 실패 또는 파일({filtered_text_file_path})을 찾을 수 없습니다.")
         logger.info(f"Task {task_id}: LLM 필터링 완료. 파일 경로: {filtered_text_file_path}")
 
-        self.update_state(state='PROGRESS', meta={'current_step': '자기소개서 생성 중...', 'filtered_text_file': filtered_text_file_path})
+        self.update_state(state='STARTED', meta={'current_step': '자기소개서 생성 중...', 'filtered_text_file': filtered_text_file_path})
         current_step = "COVER_LETTER_GENERATION"
         logger.info(f"Task {task_id}: 자기소개서 생성 시작 - generate_cover_letter 호출")
         
@@ -447,7 +447,7 @@ def perform_processing(self, job_url: str, prompt: str, job_site_name: str = "un
         if error_occurred:
             logger.error(f"Task {task_id}: perform_processing 실패. 최종 단계: {current_step}, 오류: {error_message}")
             # 실패 시 반환 값 명시 (Celery는 작업이 실패하면 예외를 전파하지만, 명시적 반환도 가능)
-            # raise Exception(error_message) # 이렇게 하면 Celery가 FAILURE로 처리
+            # self.update_state는 이미 위에서 FAILURE로 설정되었으므로 여기서는 추가 호출 불필요
             return {
                 'status': 'FAILURE',
                 'message': error_message,
@@ -458,7 +458,7 @@ def perform_processing(self, job_url: str, prompt: str, job_site_name: str = "un
         # 성공했지만 반환값이 없는 경우 (실제로는 위에서 성공 시 반환)
         elif 'return' not in locals() and not error_occurred : # 성공적으로 끝났으나 명시적 return이 없는 경우 방지
             logger.warning(f"Task {task_id}: Reached end of perform_processing without explicit success return. Forcing SUCCESS state.")
-            self.update_state(state='SUCCESS', meta={'current_step': 'COMPLETED_UNEXPECTEDLY', 'job_url': job_url, 'task_id': task_id})
+            self.update_state(state='SUCCESS', meta={'current_step': '완료 (비정상적 경로)', 'job_url': job_url, 'task_id': task_id}) # COMPLETED_UNEXPECTEDLY -> '완료 (비정상적 경로)'
             return {
                 'status': 'SUCCESS',
                 'message': 'Processing completed, but final result structure might be incomplete.',
