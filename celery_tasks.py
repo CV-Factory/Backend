@@ -18,6 +18,7 @@ from langchain_core.output_parsers import StrOutputParser
 from typing import Optional, Dict, Any, Union
 from celery import chain, signature, states
 import traceback
+from playwright.sync_api import _errors as playwright_errors
 
 # 전역 로깅 레벨 및 라이브러리 로깅 레벨 조정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -45,8 +46,8 @@ except Exception as e_dotenv:
 
 # 상수 정의
 MAX_IFRAME_DEPTH = 2
-IFRAME_LOAD_TIMEOUT = 15000
-ELEMENT_HANDLE_TIMEOUT = 10000
+IFRAME_LOAD_TIMEOUT = 30000
+ELEMENT_HANDLE_TIMEOUT = 20000
 PAGE_NAVIGATION_TIMEOUT = 120000
 DEFAULT_PAGE_TIMEOUT = 45000
 MAX_FILENAME_LENGTH = 100
@@ -254,18 +255,44 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
             # iframe을 생성된 div HTML로 교체
             try:
                 logger.info(f"{log_prefix} Attempting to replace iframe {iframe_log_id} with its content.")
-                iframe_handle.evaluate("(el, html) => { el.outerHTML = html; }", replacement_div_html)
-                logger.info(f"{log_prefix} Successfully replaced iframe {iframe_log_id} with div wrapper.")
-                processed_iframe_count += 1
-            except Exception as eval_replace_err: 
-                logger.error(f"{log_prefix} Failed to replace iframe {iframe_log_id} using evaluate: {eval_replace_err}", exc_info=True)
-                # 교체 실패 시, 원본 iframe에 에러 상태만 마킹 (이미 data-cvf-processing 상태일 것임)
-                # 이 시점에서 iframe_handle이 여전히 유효한지 확인 필요. 이미 DOM에서 제거되었을 수도.
-                # locator를 사용해 다시 찾아 마킹 시도
-                if current_playwright_context.locator(f'iframe[id="{iframe_log_id}"][data-cvf-processing="true"]').count() == 1:
-                    current_playwright_context.locator(f'iframe[id="{iframe_log_id}"]').evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                # 교체 시도 전에 iframe이 여전히 DOM에 있는지 확인 (간단한 체크)
+                if iframe_handle.is_connected():
+                    iframe_handle.evaluate("(el, html) => { el.outerHTML = html; }", replacement_div_html)
+                    logger.info(f"{log_prefix} Successfully replaced iframe {iframe_log_id} with div wrapper.")
+                    processed_iframe_count += 1
                 else:
-                    logger.warning(f"{log_prefix} iframe {iframe_log_id} not found for error marking after replacement failure.")
+                    logger.warning(f"{log_prefix} iframe {iframe_log_id} is no longer connected to the DOM. Skipping replacement.")
+                    # 이미 연결이 끊겼으므로 에러 마킹도 어려울 수 있음
+                    # evaluate로 outerHTML을 설정할 때 NoModificationAllowedError가 여기서도 발생 가능
+                    # 추가적인 에러 마킹은 finally 블록이나 상위 예외 처리에서 담당하도록 함
+            except playwright_errors.Error as ple: # Playwright 관련 에러를 명시적으로 처리
+                if "NoModificationAllowedError" in str(ple) or "no parent node" in str(ple):
+                    logger.warning(f"{log_prefix} Failed to replace iframe {iframe_log_id} due to NoModificationAllowedError (element likely detached): {ple}")
+                else:
+                    logger.error(f"{log_prefix} Failed to replace iframe {iframe_log_id} using evaluate (Playwright Error): {ple}", exc_info=True)
+                # Playwright 에러 발생 시, 해당 iframe에 에러 마킹 시도 (최선)
+                # 단, 이 시점에도 요소가 없을 수 있음
+                try:
+                    # locator로 다시 찾아, data-cvf-processing 상태가 아니어야 함 (이미 교체 시도 후)
+                    # 아직 id로 찾을 수 있고, 에러가 마킹 안되었다면 시도
+                    target_locator = current_playwright_context.locator(f'iframe[id="{iframe_log_id}"]:not([data-cvf-error="true"])')
+                    if target_locator.count() == 1:
+                         target_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                    else:
+                        logger.warning(f"{log_prefix} iframe {iframe_log_id} not found or already marked for error after Playwright replacement failure.")
+                except Exception as e_mark:
+                    logger.warning(f"{log_prefix} Exception while trying to mark iframe {iframe_log_id} as error after replacement failure: {e_mark}")
+            except Exception as eval_replace_err: 
+                logger.error(f"{log_prefix} Generic failed to replace iframe {iframe_log_id} using evaluate: {eval_replace_err}", exc_info=True)
+                # 일반 예외에 대한 에러 마킹 (위와 유사하게)
+                try:
+                    target_locator = current_playwright_context.locator(f'iframe[id="{iframe_log_id}"]:not([data-cvf-error="true"])')
+                    if target_locator.count() == 1:
+                         target_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                    else:
+                        logger.warning(f"{log_prefix} iframe {iframe_log_id} not found or already marked for error after generic replacement failure.")
+                except Exception as e_mark_generic:
+                    logger.warning(f"{log_prefix} Exception while trying to mark iframe {iframe_log_id} as error after generic replacement failure: {e_mark_generic}")
 
         except Exception as e_outer_iframe_loop: 
             # 이 블록은 개별 iframe 처리의 전체 과정을 감싸는 try문의 except
