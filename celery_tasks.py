@@ -625,7 +625,9 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
                     "filtered_text": filtered_text_file_path
                 }
             }
+            logger.info(f"{log_prefix} Attempting to update root task {chain_log_id} with NO_CONTENT_FOR_COVER_LETTER status. Details: {final_pipeline_result}")
             _update_root_task_state(chain_log_id, "파이프라인 완료 (자소서 생성 불가: 내용 부족)", status=states.SUCCESS, details=final_pipeline_result)
+            logger.info(f"{log_prefix} Root task {chain_log_id} updated with NO_CONTENT_FOR_COVER_LETTER status.")
             return final_pipeline_result
         
         logger.info(f"{log_prefix} Calling LLM for cover letter. Text length: {len(filtered_job_text)}, Prompt length: {len(user_prompt_text or '')}")
@@ -670,7 +672,9 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
                 "filtered_text": filtered_text_file_path
             }
         }
+        logger.info(f"{log_prefix} Attempting to update root task {chain_log_id} with pipeline SUCCESS status. Details: {final_pipeline_result}")
         _update_root_task_state(chain_log_id, "파이프라인 성공적으로 완료", status=states.SUCCESS, details=final_pipeline_result)
+        logger.info(f"{log_prefix} Root task {chain_log_id} updated with pipeline SUCCESS status.")
         return final_pipeline_result # 이것이 체인의 최종 결과가 됨
         
     except Exception as e:
@@ -680,7 +684,9 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             except Exception as e_remove: logger.warning(f"{log_prefix} Failed to remove partial CV file {cover_letter_file_path_final}: {e_remove}")
         
         err_details = {'error': str(e), 'type': type(e).__name__, 'filtered_file': filtered_text_file_path, 'traceback': traceback.format_exc()}
+        logger.error(f"{log_prefix} Attempting to update root task {chain_log_id} with pipeline FAILURE status due to exception. Error details: {err_details}")
         _update_root_task_state(chain_log_id, f"({step_log_id}) 자소서 생성 실패", status=states.FAILURE, error_info=err_details)
+        logger.error(f"{log_prefix} Root task {chain_log_id} updated with pipeline FAILURE status.")
         raise # 파이프라인 실패
 
 @celery_app.task(bind=True, name='celery_tasks.process_job_posting_pipeline')
