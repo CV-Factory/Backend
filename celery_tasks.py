@@ -654,9 +654,9 @@ Here is the text to analyze:
                 filtered_text_content = chain.invoke({"text_input": raw_text_content})
                 logger.info(f"Groq LLM chain invocation complete. Raw output length: {len(filtered_text_content)}")
 
-                if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
+                    if not filtered_text_content.strip() or filtered_text_content.strip() == "추출할 내용 없음":
                     logger.warning("LLM returned empty or '추출할 내용 없음' response.")
-                    filtered_text_content = "LLM 필터링 결과 내용 없음"
+                        filtered_text_content = "LLM 필터링 결과 내용 없음"
                 else:
                     logger.info("Successfully filtered text using Groq LLM.")
                     logger.debug(f"Filtered text (first 300 chars): {filtered_text_content[:300]}")
@@ -840,7 +840,7 @@ async def _async_flatten_iframes_in_live_dom(current_playwright_context, # Playw
                 try: await iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true') }")
                 except Exception as mark_err: logger.error(f"Task {task_id}: Failed to mark iframe as error after eval failed: {mark_err}", exc_info=True)
         
-        except Exception as e:
+    except Exception as e:
             logger.error(f"Task {task_id}: Outer error processing an iframe at depth {current_depth} for {original_page_url_for_logging}: {e}", exc_info=True)
             if iframe_handle:
                 try: await iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true') }")

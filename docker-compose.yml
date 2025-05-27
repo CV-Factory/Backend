@@ -1,6 +1,11 @@
 version: '3.8'
 
 services:
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+
   web:
     build: .
     ports:
@@ -9,7 +14,10 @@ services:
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
+      - REDIS_URL=redis://redis:6379/0
     command: ["./entrypoint.sh", "web"]
+    depends_on:
+      - redis
 
   worker:
     build: .
@@ -17,6 +25,7 @@ services:
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
+      - REDIS_URL=redis://redis:6379/0
     command: ["./entrypoint.sh", "worker"]
-
-volumes:
+    depends_on:
+      - redis
