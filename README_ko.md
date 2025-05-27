@@ -29,7 +29,7 @@
 
 ### 생성형 AI 및 고급 텍스트 처리
 
-- **거대 언어 모델(LLM) 통합**: `langchain_groq`의 `ChatGroq`를 통해 Groq API를 통합하여 자기소개서와 같은 특정 애플리케이션 텍스트를 생성합니다. `generate_cover_letter_semantic.py` 스크립트는 LLM이 원하는 출력을 생성하기 위해 문맥적으로 관련된 정보로 어떻게 프롬프트되는지 보여줍니다.
+- **거대 언어 모델(LLM) 통합**: `Langchain`을 사용하여 `Groq API` (기존 `Gemini API`)를 호출합니다. 사용자 제공 정보를 기반으로 자연스러운 자기소개서 초안을 생성합니다.
 - **검색 증강 생성(RAG)**: Langchain을 사용하여 RAG 파이프라인을 구현하여 자기소개서 생성과 같은 작업에 대한 LLM의 컨텍스트 이해를 향상시킵니다. `generate_cover_letter_semantic.py`에 자세히 설명된 이 프로세스에는 다음이 포함됩니다.
     - 소스 문서 로드 (예: `logs/` 디렉토리의 채용 공고 텍스트).
     - 텍스트를 관리 가능한 조각으로 청킹 ( `langchain_experimental.text_splitter`의 `SemanticChunker` 또는 `langchain.text_splitter`의 `RecursiveCharacterTextSplitter` 사용).
