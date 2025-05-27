@@ -313,7 +313,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
 
     saved_file_path = None
     browser = None
-    page = None
+            page = None
     context = None
 
     try:

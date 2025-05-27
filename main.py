@@ -155,20 +155,32 @@ async def get_task_status(task_id: str):
 
         if status == 'SUCCESS':
             logger.info(f"작업 성공 (Task ID: {task_id})")
-            response_data['result'] = result_payload
-            if not response_data['current_step']:
+            response_data['result'] = task_result.info
+            if not response_data['current_step'] and isinstance(task_result.info, dict):
+                response_data['current_step'] = task_result.info.get('current_step', 'Completed')
+            elif not response_data['current_step']:
                 response_data['current_step'] = 'Completed'
         elif status == 'FAILURE':
             logger.warning(f"작업 실패 (Task ID: {task_id}). 저장된 결과/예외: {result_payload}")
-            error_info = {"error": str(result_payload if result_payload else 'Unknown error'), 
-                          "traceback": task_result.traceback if result_payload else None}
-            response_data['result'] = error_info
-            if not response_data['current_step']:
+            error_detail_to_return = None
+            if isinstance(task_result.info, dict) and 'error_details' in task_result.info:
+                error_detail_to_return = task_result.info['error_details']
+            elif result_payload:
+                error_detail_to_return = {"error": str(result_payload), "type": type(result_payload).__name__, "traceback": task_result.traceback}
+            else:
+                error_detail_to_return = {"error": "Unknown error", "traceback": task_result.traceback}
+            
+            response_data['result'] = error_detail_to_return
+            if not response_data['current_step'] and isinstance(task_result.info, dict):
+                response_data['current_step'] = task_result.info.get('current_step', 'Failed')
+            elif not response_data['current_step']:
                 response_data['current_step'] = 'Failed'
         elif status in ['PENDING', 'STARTED', 'PROGRESS']:
             logger.info(f"작업 진행 중 (Task ID: {task_id}, Status: {status}). Meta: {task_result.info}")
             response_data['result'] = task_result.info if isinstance(task_result.info, dict) else None
-            if not response_data['current_step']:
+            if not response_data['current_step'] and isinstance(task_result.info, dict):
+                response_data['current_step'] = task_result.info.get('current_step', status)
+            elif not response_data['current_step']:
                 response_data['current_step'] = status
         
         end_time = time.time()
