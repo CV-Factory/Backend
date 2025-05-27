@@ -160,12 +160,42 @@ async def get_task_status(task_id: str):
             logger.info(f"Task ID: {task_id} SUCCESS. task_result.result (raw): {task_result.result}, type: {type(task_result.result)}")
             logger.info(f"Task ID: {task_id} SUCCESS. task_result.info (raw): {actual_result_payload}, type: {type(actual_result_payload)}")
 
-            response_data['result'] = actual_result_payload
+            if isinstance(actual_result_payload, str) and actual_result_payload == task_id:
+                # SUCCESS 상태이지만 info가 자기 자신의 ID 문자열인 경우, 파이프라인은 아직 내부 작업 진행 중으로 간주
+                logger.info(f"Task ID: {task_id} is SUCCESS but its 'info' ({actual_result_payload}) is the task_id itself. The chain is likely still processing. Returning PENDING.")
+                response_data['status'] = 'PENDING' # 프론트엔드가 계속 폴링하도록 PENDING 상태로 응답
+                # 이 시점에서 task_result.info는 문자열이므로, get('current_step')을 호출할 수 없음
+                # 가장 최근에 celery_tasks에서 _update_root_task_state로 설정했을 current_step을 알 수 있다면 좋겠지만,
+                # 현재 상태에서는 알기 어려우므로 일반적인 진행 메시지를 설정.
+                # 이전 로깅에서 확인된 current_step을 사용하거나, 기본 메시지를 사용.
+                # 안전하게 기본 메시지를 사용합니다.
+                response_data['current_step'] = "파이프라인 내부 작업 처리 중..."
+                response_data['result'] = None # 아직 최종 결과 없음
+            elif isinstance(actual_result_payload, dict):
+                # info가 딕셔너리이면, 이것이 최종 결과이거나 중간 결과 객체.
+                response_data['result'] = actual_result_payload
+                # current_step을 details에서 가져오거나, 기존 상태 유지 또는 Completed로 설정
+                response_data['current_step'] = actual_result_payload.get('current_step', response_data.get('current_step', 'Completed'))
+            else:
+                # info가 예상치 못한 타입 (None이거나 다른 타입).
+                logger.warning(f"Task ID: {task_id} SUCCESS but 'info' is of unexpected type: {type(actual_result_payload)}. Value: {actual_result_payload}. Treating as PENDING.")
+                response_data['status'] = 'PENDING'
+                response_data['current_step'] = response_data.get('current_step', "결과 형식 확인 중...")
+                response_data['result'] = None
+        
+        elif status in ['PENDING', 'STARTED', 'RETRY']:
+            # PENDING, STARTED, RETRY 상태일 때 current_step 처리
+            current_step_from_info = "작업 준비 중이거나 실행 중입니다..." # 기본값
+            if task_result.info and isinstance(task_result.info, dict):
+                current_step_from_info = task_result.info.get('current_step', current_step_from_info)
+            elif isinstance(task_result.info, str): # info가 문자열이어도 current_step은 아님.
+                logger.info(f"Task ID: {task_id} status {status}, info is a string: {task_result.info}. Using default step message.")
+            
+            response_data['current_step'] = current_step_from_info
+            # FAILURE 상태일 때 result에 에러 정보가 담길 수 있음 (Celery 기본 동작)
+            if task_result.result and status != 'SUCCESS': # 성공 아닐때만 result 보여줌
+                 response_data['result'] = task_result.result
 
-            if not response_data['current_step'] and isinstance(actual_result_payload, dict):
-                response_data['current_step'] = actual_result_payload.get('current_step', 'Completed')
-            elif not response_data['current_step']:
-                response_data['current_step'] = 'Completed'
         elif status == 'FAILURE':
             logger.warning(f"작업 실패 (Task ID: {task_id}). 저장된 결과/예외: {result_payload}")
             error_detail_to_return = None
