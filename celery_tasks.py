@@ -18,7 +18,7 @@ from langchain_core.output_parsers import StrOutputParser
 from typing import Optional, Dict, Any, Union
 from celery import chain, signature, states
 import traceback
-from playwright.sync_api import _errors as playwright_errors
+from playwright.sync_api import Error as PlaywrightError
 
 # 전역 로깅 레벨 및 라이브러리 로깅 레벨 조정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -51,6 +51,10 @@ ELEMENT_HANDLE_TIMEOUT = 20000
 PAGE_NAVIGATION_TIMEOUT = 120000
 DEFAULT_PAGE_TIMEOUT = 45000
 MAX_FILENAME_LENGTH = 100
+# 새로 추가된 타임아웃 상수
+LOCATOR_DEFAULT_TIMEOUT = 5000 
+GET_ATTRIBUTE_TIMEOUT = 10000
+EVALUATE_TIMEOUT_SHORT = 10000
 
 def sanitize_filename(url_or_name: str, extension: str = "", ensure_unique: bool = False) -> str:
     """URL 또는 임의의 문자열을 기반으로 안전하고 유효한 파일 이름을 생성합니다."""
@@ -143,68 +147,120 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
 
     processed_iframe_count = 0
     # iframe을 찾되, 이미 처리했거나 오류가 발생한 iframe은 제외
-    iframe_locators = current_playwright_context.locator('iframe:not([data-cvf-processed="true"]):not([data-cvf-error="true"])')
     
+    # 루프 시작 전에 처리해야 할 iframe의 초기 개수를 로깅 (선택적)
     try:
-        num_iframes = iframe_locators.count()
-        if num_iframes == 0:
-            logger.info(f"{log_prefix} No processable iframes found at this depth.")
+        initial_iframe_locator = current_playwright_context.locator('iframe:not([data-cvf-processed="true"]):not([data-cvf-error="true"])')
+        initial_count = initial_iframe_locator.count()
+        logger.info(f"{log_prefix} Initial check: Found {initial_count} processable iframe(s) at this depth.")
+        if initial_count == 0:
+            logger.info(f"{log_prefix} No processable iframes found at this depth based on initial check.")
             return
-        logger.info(f"{log_prefix} Found {num_iframes} processable iframe(s) at this depth.")
-    except Exception as e_count:
-        logger.warning(f"{log_prefix} Error counting iframes: {e_count}. Aborting at this level.", exc_info=True)
-        return
+    except Exception as e_initial_count:
+        logger.warning(f"{log_prefix} Error during initial iframe count: {e_initial_count}. Proceeding with loop.", exc_info=True)
+        # 계속 진행하되, 루프 조건이 이를 처리할 것임
 
-    for i in range(num_iframes):
-        iframe_locator = iframe_locators.nth(i)
+    loop_iteration_count = 0
+    max_loop_iterations = initial_count + 5 # 무한 루프 방지를 위한 안전장치 (초기 카운트보다 약간 더 많이)
+
+    while loop_iteration_count < max_loop_iterations:
+        loop_iteration_count += 1
+        iframe_locator = current_playwright_context.locator('iframe:not([data-cvf-processed="true"]):not([data-cvf-error="true"])').first
+        
+        try:
+            # 처리할 iframe이 더 이상 없는지 확인 (first를 사용하므로 count()로 확인)
+            # locator.first 접근 시 요소가 없으면 TimeoutError가 발생할 수 있으므로, count()로 먼저 확인하는 것이 더 안전할 수 있음.
+            # 그러나 .first를 직접 사용하고 예외를 잡는 것도 Playwright의 일반적인 패턴임.
+            # 여기서는 .count() > 0 조건으로 명시적으로 확인
+            if iframe_locator.count() == 0: # 짧은 타임아웃으로 존재 여부 확인
+                logger.info(f"{log_prefix} No more processable iframes found. Exiting loop after {loop_iteration_count-1} iterations.")
+                break
+        except PlaywrightError as e_no_more_iframes:
+            logger.info(f"{log_prefix} No more processable iframes found (locator.first likely timed out or element disappeared). Exiting loop. Error: {e_no_more_iframes}")
+            break # 처리할 iframe이 없으면 루프 종료
+        except Exception as e_count_check_unexpected:
+            logger.error(f"{log_prefix} Unexpected error checking for remaining iframes: {e_count_check_unexpected}. Exiting loop.", exc_info=True)
+            break
+
+
         iframe_handle = None
-        # 각 iframe에 고유 ID 부여 시도 (로깅 및 추적 용이)
-        iframe_log_id = f"iframe-gen-{uuid.uuid4().hex[:6]}" 
+        iframe_log_id = f"iframe-gen-{uuid.uuid4().hex[:6]}"
         
         try:
             # iframe ID 가져오기 또는 설정 (오류 발생 가능성 있음)
+            # element_handle을 먼저 얻고, 그 다음에 ID를 가져오거나 설정하는 것이 더 안정적일 수 있음.
+            # 그러나 locator API를 사용하는 것이 권장됨.
+            # 타임아웃을 명시적으로 설정하여 무한 대기 방지
+            logger.debug(f"{log_prefix} Attempting to get/set ID for the first found iframe.")
             try:
-                existing_id = iframe_locator.get_attribute('id')
+                # ID 가져오기 시도, 타임아웃 설정
+                existing_id = iframe_locator.get_attribute('id', timeout=GET_ATTRIBUTE_TIMEOUT)
                 if existing_id:
                     iframe_log_id = existing_id
                 else:
-                    # ID가 없다면 새로 생성하여 설정
-                    iframe_locator.evaluate("(el, id) => el.id = id", iframe_log_id)
-            except Exception as e_set_id:
-                logger.warning(f"{log_prefix} Could not reliably set/get ID for iframe #{i+1}. Using generated: {iframe_log_id}. Error: {e_set_id}")
+                    # ID가 없다면 새로 생성하여 설정, 타임아웃 설정
+                    iframe_locator.evaluate("(el, id) => el.id = id", iframe_log_id, timeout=EVALUATE_TIMEOUT_SHORT)
+            except PlaywrightError as e_id_timeout: # Playwright의 TimeoutError 또는 기타 에러
+                 logger.warning(f"{log_prefix} Timeout or PlaywrightError getting/setting ID for an iframe (iteration {loop_iteration_count}). Using generated: {iframe_log_id}. Error: {e_id_timeout}")
+            except Exception as e_set_id: # 기타 예외
+                logger.warning(f"{log_prefix} Could not reliably set/get ID for an iframe (iteration {loop_iteration_count}). Using generated: {iframe_log_id}. Error: {e_set_id}")
 
-            logger.info(f"{log_prefix} Processing iframe #{i+1}/{num_iframes} (Effective ID: {iframe_log_id}).")
-            # 현재 처리 중인 iframe임을 DOM에 표시
-            iframe_locator.evaluate("el => el.setAttribute('data-cvf-processing', 'true')")
+            logger.info(f"{log_prefix} Processing iframe (loop iteration #{loop_iteration_count}, Effective ID: {iframe_log_id}).")
+            
+            # 현재 처리 중인 iframe임을 DOM에 표시 (타임아웃 설정)
+            iframe_locator.evaluate("el => el.setAttribute('data-cvf-processing', 'true')", timeout=EVALUATE_TIMEOUT_SHORT)
 
             iframe_handle = iframe_locator.element_handle(timeout=ELEMENT_HANDLE_TIMEOUT)
             if not iframe_handle:
                 logger.warning(f"{log_prefix} Null element_handle for iframe {iframe_log_id}. Marking with error and skipping.")
-                iframe_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                # 핸들을 못 얻었으므로 locator로 에러 마킹 시도
+                iframe_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
                 continue
 
-            iframe_src_attr = iframe_handle.get_attribute('src') or "[src attribute not found]"
+            iframe_src_attr = "[src attribute not found or error]"
+            try:
+                iframe_src_attr = iframe_handle.get_attribute('src') or "[src attribute not found]"
+            except Exception as e_get_src:
+                logger.warning(f"{log_prefix} Error getting src attribute for iframe {iframe_log_id}: {e_get_src}")
+            
             logger.debug(f"{log_prefix} iframe {iframe_log_id} src attribute: {iframe_src_attr[:150]}")
 
-            child_frame = iframe_handle.content_frame()
+            child_frame = None
+            try:
+                child_frame = iframe_handle.content_frame() # 이 호출은 타임아웃을 직접 받지 않지만, 핸들이 유효하면 빠르게 반환됨
+            except Exception as e_content_frame:
+                logger.error(f"{log_prefix} Error getting content_frame for iframe {iframe_log_id}: {e_content_frame}", exc_info=True)
+                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
+                continue
+
             if not child_frame: 
                 logger.warning(f"{log_prefix} content_frame is None for iframe {iframe_log_id}. Marking with error and skipping.")
-                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
                 continue
             
             child_frame_url_for_log = "[child frame URL not accessible]"
             try:
                 child_frame_url_for_log = child_frame.url # 로드 전에 URL 접근 시도
-            except Exception:
+            except Exception: # PlaywrightError 등 발생 가능
                 pass
 
             try:
                 logger.info(f"{log_prefix} Waiting for child_frame (ID: {iframe_log_id}, URL: {child_frame_url_for_log}) to load (domcontentloaded)...")
                 child_frame.wait_for_load_state('domcontentloaded', timeout=IFRAME_LOAD_TIMEOUT) 
-                logger.info(f"{log_prefix} Child_frame (ID: {iframe_log_id}, Final URL: {child_frame.url}) loaded.")
-            except Exception as frame_load_err:
-                logger.error(f"{log_prefix} Timeout or error loading child_frame {iframe_log_id} (src attr: {iframe_src_attr[:100]}, initial URL: {child_frame_url_for_log}): {frame_load_err}", exc_info=True)
-                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                # 로드 후 URL 다시 로깅 (리다이렉션 등 확인)
+                final_child_frame_url = "[child frame final URL not accessible]"
+                try:
+                    final_child_frame_url = child_frame.url
+                except Exception:
+                    pass
+                logger.info(f"{log_prefix} Child_frame (ID: {iframe_log_id}, Final URL: {final_child_frame_url}) loaded.")
+            except PlaywrightError as frame_load_ple: # Playwright TimeoutError 등
+                logger.error(f"{log_prefix} PlaywrightError (Timeout or other) loading child_frame {iframe_log_id} (src attr: {iframe_src_attr[:100]}, initial URL: {child_frame_url_for_log}): {frame_load_ple}", exc_info=True)
+                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
+                continue
+            except Exception as frame_load_err: # 기타 예외
+                logger.error(f"{log_prefix} Generic error loading child_frame {iframe_log_id} (src attr: {iframe_src_attr[:100]}, initial URL: {child_frame_url_for_log}): {frame_load_err}", exc_info=True)
+                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
                 continue
 
             # --- 재귀 호출 ---
@@ -219,7 +275,7 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
                     child_html_content = f"<!-- iframe {iframe_log_id} (src: {iframe_src_attr[:100]}) content was empty post-recursion -->"
             except Exception as frame_content_err:
                 logger.error(f"{log_prefix} Error getting content from child_frame {iframe_log_id} (src: {iframe_src_attr[:100]}): {frame_content_err}", exc_info=True)
-                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
                 continue # 이 iframe 처리는 실패로 간주하고 다음으로
 
             # iframe 내용을 div로 감싸서 교체할 HTML 생성
@@ -255,17 +311,23 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
             # iframe을 생성된 div HTML로 교체
             try:
                 logger.info(f"{log_prefix} Attempting to replace iframe {iframe_log_id} with its content.")
-                # 교체 시도 전에 iframe이 여전히 DOM에 있는지 확인 (간단한 체크)
-                if iframe_handle.is_connected():
+                # iframe_handle이 유효하고 evaluate 메소드가 있는지, 그리고 DOM에 연결되어 있는지 확인
+                is_connected_js = False
+                if iframe_handle and hasattr(iframe_handle, 'evaluate'):
+                    try:
+                        is_connected_js = iframe_handle.evaluate('el => el.isConnected')
+                    except Exception as e_eval_isconnected:
+                        logger.warning(f"{log_prefix} Error evaluating 'el.isConnected' for iframe {iframe_log_id}: {e_eval_isconnected}")
+                        is_connected_js = False # 평가 중 오류 발생 시 연결되지 않은 것으로 간주
+
+                if is_connected_js:
                     iframe_handle.evaluate("(el, html) => { el.outerHTML = html; }", replacement_div_html)
                     logger.info(f"{log_prefix} Successfully replaced iframe {iframe_log_id} with div wrapper.")
                     processed_iframe_count += 1
                 else:
-                    logger.warning(f"{log_prefix} iframe {iframe_log_id} is no longer connected to the DOM. Skipping replacement.")
+                    logger.warning(f"{log_prefix} iframe {iframe_log_id} is not connected or evaluate failed. Skipping replacement.")
                     # 이미 연결이 끊겼으므로 에러 마킹도 어려울 수 있음
-                    # evaluate로 outerHTML을 설정할 때 NoModificationAllowedError가 여기서도 발생 가능
-                    # 추가적인 에러 마킹은 finally 블록이나 상위 예외 처리에서 담당하도록 함
-            except playwright_errors.Error as ple: # Playwright 관련 에러를 명시적으로 처리
+            except PlaywrightError as ple: # Playwright 관련 에러를 명시적으로 처리
                 if "NoModificationAllowedError" in str(ple) or "no parent node" in str(ple):
                     logger.warning(f"{log_prefix} Failed to replace iframe {iframe_log_id} due to NoModificationAllowedError (element likely detached): {ple}")
                 else:
@@ -296,7 +358,7 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
 
         except Exception as e_outer_iframe_loop: 
             # 이 블록은 개별 iframe 처리의 전체 과정을 감싸는 try문의 except
-            logger.error(f"{log_prefix} General error processing iframe {iframe_log_id} (loop iteration #{i+1}): {e_outer_iframe_loop}", exc_info=True)
+            logger.error(f"{log_prefix} General error processing iframe {iframe_log_id} (loop iteration #{loop_iteration_count}): {e_outer_iframe_loop}", exc_info=True)
             # iframe_handle이 존재하고, 아직 처리 중(data-cvf-processing)이라면 에러 마킹 시도
             if iframe_handle: 
                 try: 
@@ -314,135 +376,143 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
                     iframe_handle.dispose()
                 except Exception as e_dispose: 
                     logger.warning(f"{log_prefix} Error disposing element_handle for iframe {iframe_log_id}: {e_dispose}", exc_info=True)
-            # 처리 중이던 상태(data-cvf-processing)가 남아있다면, 완료 또는 에러 상태로 변경해야 함.
-            # locator로 다시 찾아, 만약 아직 processing 상태라면 error로 변경 (최후의 수단)
-            # 단, 성공적으로 교체된 경우는 locator로 찾을 수 없음.
+            # 처리 중이던 상태(data-cvf-processing)가 남아있고, 해당 iframe이 아직 DOM에 있다면,
+            # 성공적으로 교체되지 않았음을 의미하므로 에러 상태로 변경해야 함.
+            # 이 로직은 iframe_locator가 현재 루프에서 처리하려던 그 iframe을 여전히 가리킨다고 가정.
             try:
-                remaining_iframe_locator = current_playwright_context.locator(f'iframe[id="{iframe_log_id}"][data-cvf-processing="true"]')
-                if remaining_iframe_locator.count() == 1:
-                    logger.warning(f"{log_prefix} iframe {iframe_log_id} was left in 'processing' state. Marking as error.")
-                    remaining_iframe_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                # locator를 사용하여 해당 ID와 processing 상태를 가진 iframe을 다시 찾음.
+                # 성공적으로 교체되었다면 이 locator는 아무것도 찾지 않아야 함.
+                # 루프 초반에 사용했던 `iframe_locator` 변수는 다음 루프를 위해 `first`로 재할당되므로
+                # 여기서 ID로 다시 찾아야 함.
+                problematic_iframe_locator = current_playwright_context.locator(f'iframe[id="{iframe_log_id}"][data-cvf-processing="true"]')
+                if problematic_iframe_locator.count() == 1:
+                    logger.warning(f"{log_prefix} iframe {iframe_log_id} was left in 'processing' state after its loop. Marking as error.")
+                    problematic_iframe_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
+            except PlaywrightError as e_final_ple: # Playwright 타임아웃 등
+                 logger.warning(f"{log_prefix} PlaywrightError during final cleanup check for iframe {iframe_log_id}: {e_final_ple}")
             except Exception as e_final_cleanup_locator:
-                 logger.warning(f"{log_prefix} Error during final cleanup check for iframe {iframe_log_id}: {e_final_cleanup_locator}")
+                 logger.warning(f"{log_prefix} Generic error during final cleanup check for iframe {iframe_log_id}: {e_final_cleanup_locator}")
 
+    if loop_iteration_count >= max_loop_iterations:
+        logger.warning(f"{log_prefix} Max loop iterations ({max_loop_iterations}) reached. Exiting iframe processing to prevent infinite loop.")
 
-    logger.info(f"{log_prefix} Finished all iframe processing at depth {current_depth}. Total iframes found at this depth: {num_iframes}. Successfully processed/replaced: {processed_iframe_count}.")
+    logger.info(f"{log_prefix} Finished all iframe processing attempts at depth {current_depth}. Total iterations: {loop_iteration_count-1}. Successfully processed/replaced: {processed_iframe_count}.")
 
 
 @celery_app.task(bind=True, name='celery_tasks.step_1_extract_html', max_retries=1, default_retry_delay=10)
 def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
-    """(1단계) URL에서 HTML을 추출하고 iframe을 평탄화하여 파일에 저장합니다."""
     task_id = self.request.id
-    step_log_id = "1_extract_html"
-    log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id}]"
-    logger.info(f"{log_prefix} Starting: Extract HTML from URL: {url}")
-    _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 본문 추출 시작", details={'url': url, 'current_task_id': task_id})
+    log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step 1_extract_html]"
+    logger.info(f"{log_prefix} ---------- Task started. URL: {url} ----------")
 
-    saved_file_path = None
-    browser = None
-    page = None
-    context = None
+    # 루트 작업 상태 업데이트 (시작)
+    _update_root_task_state(chain_log_id, f"(1_extract_html) HTML 추출 시작: {url}", details={'current_task_id': str(task_id), 'url_for_step1': url})
 
+    html_file_path = ""
     try:
-        with sync_playwright() as p_instance:
+        logger.info(f"{log_prefix} Initializing Playwright...")
+        with sync_playwright() as p:
+            logger.info(f"{log_prefix} Playwright initialized. Launching browser...")
             try:
-                logger.info(f"{log_prefix} Launching Chromium browser.")
-                browser_args = [
-                    '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', 
-                    '--disable-gpu', '--blink-settings=imagesEnabled=false', '--disable-extensions',
-                    '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests',
-                    '--enable-features=NetworkService,NetworkServiceInProcess' 
-                ]
-                # Docker 환경 변수 IN_DOCKER_CONTAINER는 Dockerfile에서 설정했다고 가정
-                # in_docker = os.getenv("IN_DOCKER_CONTAINER", "false").lower() == "true"
-                # logger.info(f"{log_prefix} Docker environment detected: {in_docker}") 
+                # browser = p.chromium.launch(headless=True) # 로컬 테스트 시
+                browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']) # Docker 환경
+                logger.info(f"{log_prefix} Browser launched.")
+            except Exception as e_browser:
+                logger.error(f"{log_prefix} Error launching browser: {e_browser}", exc_info=True)
+                _update_root_task_state(chain_log_id, "(1_extract_html) 브라우저 실행 실패", status=states.FAILURE, error_info={'error': str(e_browser), 'traceback': traceback.format_exc()})
+                self.update_state(state=states.FAILURE, meta={'error': str(e_browser)})
+                raise Reject(f"Browser launch failed: {e_browser}", requeue=False)
+
+            try:
+                page = browser.new_page()
+                logger.info(f"{log_prefix} New page created. Setting default timeout to {DEFAULT_PAGE_TIMEOUT}ms.")
+                page.set_default_timeout(DEFAULT_PAGE_TIMEOUT) # 모든 Playwright 작업에 대한 기본 타임아웃 설정
+                page.set_default_navigation_timeout(PAGE_NAVIGATION_TIMEOUT)
                 
-                browser = p_instance.chromium.launch(headless=True, args=browser_args)
-                logger.info(f"{log_prefix} Chromium browser launched (v: {browser.version}).")
+                logger.info(f"{log_prefix} Navigating to URL: {url}")
+                page.goto(url, wait_until="domcontentloaded") # 'load' 또는 'networkidle' 고려
+                logger.info(f"{log_prefix} Successfully navigated to URL. Current page URL: {page.url}")
 
-                context = browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    java_script_enabled=True,
-                    bypass_csp=True,
-                    ignore_https_errors=True,
-                )
-                context.set_default_navigation_timeout(PAGE_NAVIGATION_TIMEOUT)
-                context.set_default_timeout(DEFAULT_PAGE_TIMEOUT)
-                page = context.new_page()
-                logger.info(f"{log_prefix} Browser context and page created.")
+                # 페이지 로드 후 추가적인 안정화 시간 (선택적)
+                # logger.info(f"{log_prefix} Waiting for 3 seconds for dynamic content to potentially load...")
+                # time.sleep(3)
 
-            except Exception as browser_launch_error:
-                logger.error(f"{log_prefix} Failed to launch browser or create context/page: {browser_launch_error}", exc_info=True)
-                _update_root_task_state(chain_log_id, f"({step_log_id}) 브라우저 실행 실패", status=states.FAILURE, error_info={'error': str(browser_launch_error), 'details': 'Browser launch/setup failed'})
-                raise # 태스크 실패 처리
+                logger.info(f"{log_prefix} Starting iframe processing and content extraction.")
+                # 이전 step_log_id 대신 현재 task_id 또는 고유한 식별자 사용
+                page_content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, str(task_id))
+                logger.info(f"{log_prefix} Page content extracted. Length: {len(page_content)}")
 
-            try:
-                logger.info(f"{log_prefix} Navigating to: {url}")
-                page.goto(url, wait_until="domcontentloaded", timeout=PAGE_NAVIGATION_TIMEOUT)
-                logger.info(f"{log_prefix} Navigation to {url} successful. Current URL: {page.url}")
-                _update_root_task_state(chain_log_id, f"({step_log_id}) 페이지 로드 완료, iframe 처리 시작")
-            except Exception as navigation_error:
-                logger.error(f"{log_prefix} Navigation failed for {url}: {navigation_error}", exc_info=True)
-                _update_root_task_state(chain_log_id, f"({step_log_id}) 페이지 네비게이션 실패", status=states.FAILURE, error_info={'error': str(navigation_error), 'url': url})
-                raise
+                # 파일 저장 로직
+                # ... (이하 동일)
+            except PlaywrightError as e_playwright: # Playwright 관련 주요 예외
+                error_message = f"Playwright operation failed: {e_playwright}"
+                logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+                _update_root_task_state(chain_log_id, "(1_extract_html) Playwright 작업 실패", status=states.FAILURE, error_info={'error': str(e_playwright), 'traceback': traceback.format_exc(), 'url': url})
+                # self.update_state(state=states.FAILURE, meta={'error': str(e_playwright), 'url': url}) # 개별 작업 상태도 업데이트
+                # 실패 시 재시도 로직은 Celery의 max_retries에 의해 이미 처리됨. 여기서는 Reject로 명시적 실패 처리.
+                raise Reject(error_message, requeue=False) # 재시도하지 않고 실패 처리
+            except Exception as e_general:
+                error_message = f"An unexpected error occurred during HTML extraction: {e_general}"
+                logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+                _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 중 예기치 않은 오류", status=states.FAILURE, error_info={'error': str(e_general), 'traceback': traceback.format_exc(), 'url': url})
+                # self.update_state(state=states.FAILURE, meta={'error': str(e_general), 'url': url})
+                raise Reject(error_message, requeue=False)
+            finally:
+                logger.info(f"{log_prefix} Closing browser.")
+                if 'browser' in locals() and browser:
+                    try:
+                        browser.close()
+                        logger.info(f"{log_prefix} Browser closed successfully.")
+                    except Exception as e_close:
+                        logger.warning(f"{log_prefix} Error closing browser: {e_close}", exc_info=True)
+                logger.info(f"{log_prefix} Playwright context cleanup finished.")
+        
+        logger.info(f"{log_prefix} Playwright operations complete.")
 
-            try:
-                logger.info(f"{log_prefix} Waiting for network idle (briefly)...")
-                page.wait_for_load_state('networkidle', timeout=15000)
-                logger.info(f"{log_prefix} Network idle or timeout reached.")
-            except Exception as network_idle_err:
-                logger.warning(f"{log_prefix} Networkidle wait error/timeout: {network_idle_err}. Proceeding.")
-            
-            logger.info(f"{log_prefix} Starting HTML content extraction with iframe processing.")
-            html_content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, step_log_id)
+        # 파일 이름 생성 및 저장
+        os.makedirs("logs", exist_ok=True)
+        filename_base = sanitize_filename(url, ensure_unique=False) # 고유 ID는 아래에서 추가
+        # 파일 이름에 chain_log_id의 일부와 고유 해시를 추가하여 추적 용이성 및 충돌 방지
+        unique_file_id = hashlib.md5((chain_log_id + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]
+        html_file_name = f"{filename_base}_raw_html_{chain_log_id[:8]}_{unique_file_id}.html"
+        html_file_path = os.path.join("logs", html_file_name)
 
-            if not html_content or html_content.startswith("<!-- Error") or "Page content was empty" in html_content:
-                err_msg = f"Invalid HTML content after iframe processing from {url}. Snippet: {html_content[:200]}"
-                logger.error(f"{log_prefix} {err_msg}")
-                _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 컨텐츠 추출 실패 (내용부실)", status=states.FAILURE, error_info={'error': err_msg, 'url': url})
-                raise ValueError(err_msg)
+        logger.info(f"{log_prefix} Saving extracted HTML to: {html_file_path}")
+        with open(html_file_path, "w", encoding="utf-8") as f:
+            f.write(page_content)
+        logger.info(f"{log_prefix} HTML content successfully saved to {html_file_path}.")
 
-            logger.info(f"{log_prefix} HTML content extracted (length: {len(html_content)}).")
+        result_data = {"html_file_path": html_file_path, "original_url": url}
+        _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 및 저장 완료", details={'html_file_path': html_file_path})
+        logger.info(f"{log_prefix} ---------- Task finished successfully. Result: {result_data} ----------")
+        return result_data
 
-            logs_dir = "logs"
-            os.makedirs(logs_dir, exist_ok=True)
-            
-            base_fn_prefix = sanitize_filename(url) # URL 기반으로 일단 생성
-            # chain_log_id의 일부를 추가하여 고유성 증대 및 추적 용이
-            unique_html_fn = sanitize_filename(f"{base_fn_prefix}_raw_html_{chain_log_id[:8]}", "html", ensure_unique=True)
-            saved_file_path = os.path.join(logs_dir, unique_html_fn)
-            
-            try:
-                with open(saved_file_path, "w", encoding="utf-8") as f:
-                    f.write(html_content)
-                logger.info(f"{log_prefix} HTML content saved to: {saved_file_path}")
-                _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 파일 저장 완료", details={'html_file_path': saved_file_path})
-                # 성공적으로 저장했으므로 결과를 반환합니다.
-                return {"html_file_path": saved_file_path, "original_url": url}
+    except Reject as e_reject: # 명시적으로 Reject된 경우, Celery가 재시도 또는 실패 처리
+        logger.warning(f"{log_prefix} Task explicitly rejected: {e_reject.reason}. Celery will handle retry/failure.")
+        _update_root_task_state(chain_log_id, f"(1_extract_html) 작업 명시적 거부: {e_reject.reason}", status=states.FAILURE, error_info={'error': str(e_reject.reason), 'reason_for_reject': getattr(e_reject, 'message', str(e_reject))}) # 상세 정보 추가
+        raise # Celery가 처리하도록 re-raise
 
-            except IOError as e_io_save:
-                logger.error(f"{log_prefix} Failed to save HTML to {saved_file_path}: {e_io_save}", exc_info=True)
-                _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 파일 저장 실패", status=states.FAILURE, error_info={'error': str(e_io_save), 'file_path': saved_file_path})
-                raise # IOError 발생 시 현재 태스크를 실패 처리
+    except MaxRetriesExceededError as e_max_retries:
+        error_message = "Max retries exceeded for HTML extraction."
+        logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True) # exc_info=True 추가
+        _update_root_task_state(chain_log_id, "(1_extract_html) 최대 재시도 초과", status=states.FAILURE, error_info={'error': error_message, 'original_exception': str(e_max_retries), 'traceback': traceback.format_exc()})
+        # self.update_state(state=states.FAILURE, meta={'error': error_message, 'original_exception': str(e_max_retries)})
+        # MaxRetriesExceededError는 Celery에 의해 자동으로 전파되므로, 여기서 다시 raise할 필요는 없을 수 있으나,
+        # 명시적으로 체인을 중단시키고 싶다면 raise하는 것이 안전합니다.
+        # 또는 특정 값을 반환하여 파이프라인의 다음 단계에서 이를 인지하도록 할 수 있습니다.
+        # 여기서는 더 이상 진행되지 않도록 예외를 다시 발생시킵니다.
+        raise
 
-    except Exception as e: # Playwright 블록 내의 모든 예외 포함
-        logger.error(f"{log_prefix} Unhandled error in HTML extraction: {e}", exc_info=True)
-        # 이미 상태 업데이트가 되었을 수 있지만, 최종적으로 실패 상태 보장
-        err_details = {'error': str(e), 'type': type(e).__name__, 'traceback': traceback.format_exc()}
-        _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 추출 중 심각한 오류", status=states.FAILURE, error_info=err_details)
-        raise # Celery가 태스크를 실패로 처리하도록 함
-
-    finally:
-        if page: 
-            try: page.close()
-            except Exception: pass
-        if context: 
-            try: context.close()
-            except Exception: pass
-        if browser: 
-            try: browser.close()
-            except Exception: pass
-        logger.info(f"{log_prefix} Playwright resources cleaned up.")
+    except Exception as e_outer:
+        # 이 블록은 Reject, MaxRetriesExceededError 외의 예외를 잡습니다.
+        # 이미 try-except-finally 블록 내에서 대부분의 예외가 처리되어 Reject로 변환되거나 로깅되었을 것입니다.
+        # 그럼에도 불구하고 여기까지 온 예외는 매우 예기치 않은 상황일 수 있습니다.
+        error_message = f"Outer catch-all error in step_1_extract_html: {e_outer}"
+        logger.critical(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+        _update_root_task_state(chain_log_id, "(1_extract_html) 처리되지 않은 심각한 오류", status=states.FAILURE, error_info={'error': str(e_outer), 'traceback': traceback.format_exc()})
+        # self.update_state(state=states.FAILURE, meta={'error': error_message})
+        # 심각한 오류이므로, 재시도하지 않고 즉시 실패 처리하기 위해 Reject 사용 가능
+        raise Reject(f"Critical unhandled error: {e_outer}", requeue=False)
 
 @celery_app.task(bind=True, name='celery_tasks.step_2_extract_text', max_retries=1, default_retry_delay=5)
 def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) -> Dict[str, str]:
@@ -450,68 +520,121 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
     task_id = self.request.id
     step_log_id = "2_extract_text"
     log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id}]"
-    
-    html_file_path = prev_result.get("html_file_path")
-    original_url = prev_result.get("original_url", "N/A")
+    logger.info(f"{log_prefix} ---------- Task started. Received prev_result: {prev_result} ----------")
 
-    if not html_file_path or not os.path.exists(html_file_path):
-        error_msg = f"HTML file not found or path invalid: {html_file_path}"
-        logger.error(f"{log_prefix} {error_msg}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 입력 HTML 파일 없음", status=states.FAILURE, error_info={'error': error_msg, 'path_checked': html_file_path})
-        raise ValueError(error_msg)
-
-    logger.info(f"{log_prefix} Starting text extraction from: {html_file_path}")
-    _update_root_task_state(chain_log_id, f"({step_log_id}) HTML에서 텍스트 추출 시작", details={'html_file_path': html_file_path, 'current_task_id': task_id})
-
-    extracted_text_file_path = None
+    html_file_path = None
+    original_url = "N/A"
     try:
+        html_file_path = prev_result.get("html_file_path")
+        original_url = prev_result.get("original_url", "N/A")
+        logger.info(f"{log_prefix} Extracted html_file_path: {html_file_path}, original_url: {original_url}")
+
+        if not html_file_path or not isinstance(html_file_path, str) or not os.path.exists(html_file_path):
+            error_msg = f"HTML file not found, path invalid, or not a string: {html_file_path} (type: {type(html_file_path).__name__})"
+            logger.error(f"{log_prefix} {error_msg}")
+            _update_root_task_state(chain_log_id, f"({step_log_id}) 입력 HTML 파일 오류", status=states.FAILURE, error_info={'error': error_msg, 'path_checked': str(html_file_path)})
+            # 중요: 여기서 ValueError를 발생시켜 Celery가 재시도하거나 실패 처리하도록 함
+            raise ValueError(error_msg)
+
+        logger.info(f"{log_prefix} Starting text extraction from valid HTML file: {html_file_path}")
+        _update_root_task_state(chain_log_id, f"({step_log_id}) HTML에서 텍스트 추출 시작", details={'html_file_path': html_file_path, 'current_task_id': task_id})
+
+        extracted_text_file_path = None # 초기화
+
+        logger.debug(f"{log_prefix} Attempting to read HTML file content.")
         with open(html_file_path, "r", encoding="utf-8") as f:
             html_content = f.read()
-        
+        logger.info(f"{log_prefix} Successfully read HTML file. Content length: {len(html_content)}")
+
+        logger.debug(f"{log_prefix} Initializing BeautifulSoup parser.")
         soup = BeautifulSoup(html_content, "html.parser")
-        for el in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        logger.info(f"{log_prefix} BeautifulSoup initialized.")
+
+        logger.debug(f"{log_prefix} Removing comments.")
+        comments_removed_count = 0
+        for el in soup.find_all(string=lambda text_node: isinstance(text_node, Comment)):
             el.extract()
-        for el in soup(["script", "style", "noscript", "link", "meta", "header", "footer", "nav", "aside"]):
-            el.decompose()
+            comments_removed_count += 1
+        logger.info(f"{log_prefix} Removed {comments_removed_count} comments.")
+
+        logger.debug(f"{log_prefix} Removing script, style, and other unwanted tags.")
+        decomposed_tags_count = 0
+        tags_to_decompose = ["script", "style", "noscript", "link", "meta", "header", "footer", "nav", "aside"]
+        for tag_name in tags_to_decompose:
+            for el in soup.find_all(tag_name):
+                el.decompose()
+                decomposed_tags_count +=1
+        logger.info(f"{log_prefix} Decomposed {decomposed_tags_count} unwanted tags ({tags_to_decompose}).")
         
+        logger.debug(f"{log_prefix} Extracting text with soup.get_text().")
         text = soup.get_text(separator="\n", strip=True)
+        logger.info(f"{log_prefix} Initial text extracted. Length: {len(text)}. Applying regex.")
+
+        logger.debug(f"{log_prefix} Normalizing whitespaces and newlines.")
+        text_before_re = text
         text = re.sub(r'[\s\xa0]+', ' ', text) # NBSP 포함 모든 공백류를 단일 공백으로
         text = re.sub(r' (\n)+', '\n', text) # 공백 후 개행은 개행만
         text = re.sub(r'(\n)+ ', '\n', text) # 개행 후 공백은 개행만
         text = re.sub(r'(\n){2,}', '\n\n', text) # 2회 이상 연속 개행은 2회로
         text = text.strip()
+        logger.info(f"{log_prefix} Text after regex. Length: {len(text)}. (Before regex: {len(text_before_re)})")
 
         if not text:
-            logger.warning(f"{log_prefix} No text extracted from {html_file_path}. File will be empty.")
-        
-        logs_dir = "logs"
-        os.makedirs(logs_dir, exist_ok=True)
-        base_html_fn = os.path.splitext(os.path.basename(html_file_path))[0]
-        # _raw_html_xxxxxxx 부분 제거 시도
-        base_html_fn = re.sub(r'_raw_html_[a-f0-9]{8}$', '', base_html_fn)
-        unique_text_fn = sanitize_filename(f"{base_html_fn}_extracted_text", "txt", ensure_unique=True)
-        extracted_text_file_path = os.path.join(logs_dir, unique_text_fn)
+            logger.warning(f"{log_prefix} No text extracted after processing from {html_file_path}. Resulting file will be empty or placeholder.")
+            # 빈 텍스트도 파일로 저장하고 다음 단계로 넘길 수 있도록 처리 (필요시)
+            # 또는 여기서 특정 오류를 발생시킬 수도 있음. 현재는 경고 후 진행.
 
+        logs_dir = "logs"
+        logger.debug(f"{log_prefix} Ensuring logs directory exists: {logs_dir}")
+        os.makedirs(logs_dir, exist_ok=True)
+        
+        logger.debug(f"{log_prefix} Sanitizing filename. Original html_file_path: {html_file_path}")
+        base_html_fn = os.path.splitext(os.path.basename(html_file_path))[0]
+        logger.debug(f"{log_prefix} base_html_fn (splitext): {base_html_fn}")
+        base_html_fn = re.sub(r'_raw_html_[a-f0-9]{8}$', '', base_html_fn) # _raw_html_xxxxxxx 부분 제거
+        logger.debug(f"{log_prefix} base_html_fn (after re.sub): {base_html_fn}")
+        
+        unique_text_fn_stem = f"{base_html_fn}_extracted_text"
+        unique_text_fn = sanitize_filename(unique_text_fn_stem, "txt", ensure_unique=True)
+        extracted_text_file_path = os.path.join(logs_dir, unique_text_fn)
+        logger.info(f"{log_prefix} Determined extracted text file path: {extracted_text_file_path}")
+
+        logger.debug(f"{log_prefix} Attempting to write extracted text to file.")
         with open(extracted_text_file_path, "w", encoding="utf-8") as f:
             f.write(text)
-        logger.info(f"{log_prefix} Text extracted to: {extracted_text_file_path} (Length: {len(text)})")
+        logger.info(f"{log_prefix} Text extracted and saved to: {extracted_text_file_path} (Final Length: {len(text)})")
         _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 파일 저장 완료", details={'text_file_path': extracted_text_file_path})
         
-        # 다음 단계로 필요한 정보만 전달
+        logger.info(f"{log_prefix} ---------- Task finished successfully. Returning result. ----------")
         return {"text_file_path": extracted_text_file_path, 
                 "original_url": original_url, 
                 "html_file_path": html_file_path # 로깅/추적용으로 유지
                }
 
-    except Exception as e:
-        logger.error(f"{log_prefix} Error extracting text from {html_file_path}: {e}", exc_info=True)
-        if extracted_text_file_path and os.path.exists(extracted_text_file_path):
-            try: os.remove(extracted_text_file_path) # 실패 시 생성된 파일 삭제
-            except Exception as e_remove: logger.warning(f"{log_prefix} Failed to remove partial text file {extracted_text_file_path}: {e_remove}")
-        
-        err_details = {'error': str(e), 'type': type(e).__name__, 'html_file': html_file_path, 'traceback': traceback.format_exc()}
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 추출 실패", status=states.FAILURE, error_info=err_details)
+    except FileNotFoundError as e_fnf:
+        logger.error(f"{log_prefix} FileNotFoundError during text extraction: {e_fnf}. HTML file path: {html_file_path}", exc_info=True)
+        err_details_fnf = {'error': str(e_fnf), 'type': type(e_fnf).__name__, 'html_file': str(html_file_path), 'traceback': traceback.format_exc()}
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 추출 실패 (파일 없음)", status=states.FAILURE, error_info=err_details_fnf)
+        raise # Celery가 태스크를 실패로 처리하도록 함
+    except IOError as e_io:
+        logger.error(f"{log_prefix} IOError during text extraction: {e_io}. HTML file path: {html_file_path}", exc_info=True)
+        err_details_io = {'error': str(e_io), 'type': type(e_io).__name__, 'html_file': str(html_file_path), 'traceback': traceback.format_exc()}
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 추출 실패 (IO 오류)", status=states.FAILURE, error_info=err_details_io)
         raise
+    except Exception as e_general:
+        logger.error(f"{log_prefix} General error during text extraction from {html_file_path}: {e_general}", exc_info=True)
+        if extracted_text_file_path and os.path.exists(extracted_text_file_path):
+            try:
+                logger.warning(f"{log_prefix} Attempting to remove partially created file: {extracted_text_file_path} due to error.")
+                os.remove(extracted_text_file_path) 
+            except Exception as e_remove: 
+                logger.warning(f"{log_prefix} Failed to remove partial text file {extracted_text_file_path}: {e_remove}", exc_info=True)
+        
+        err_details_general = {'error': str(e_general), 'type': type(e_general).__name__, 'html_file': str(html_file_path), 'traceback': traceback.format_exc()}
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 추출 중 알 수 없는 오류", status=states.FAILURE, error_info=err_details_general)
+        raise
+    finally:
+        logger.info(f"{log_prefix} ---------- Task execution attempt ended. ----------")
 
 @celery_app.task(bind=True, name='celery_tasks.step_3_filter_content', max_retries=1, default_retry_delay=15)
 def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) -> Dict[str, str]:
@@ -592,7 +715,10 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
         return {"filtered_text_file_path": filtered_text_file_path, 
                 "original_url": original_url, 
                 "html_file_path": html_file_path, # 로깅/추적용
-                "raw_text_file_path": raw_text_file_path # 로깅/추적용
+                "raw_text_file_path": raw_text_file_path, # 로깅/추적용
+                "status_history": result.get("status_history", []),
+                "cover_letter_preview": filtered_content[:500] + ("..." if len(filtered_content) > 500 else ""),
+                "llm_model_used_for_cv": "N/A"
                }
 
     except Exception as e:
@@ -601,9 +727,11 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
             try: os.remove(filtered_text_file_path)
             except Exception as e_remove: logger.warning(f"{log_prefix} Failed to remove partial filtered file {filtered_text_file_path}: {e_remove}")
 
-        err_details = {'error': str(e), 'type': type(e).__name__, 'raw_text_file': raw_text_file_path, 'traceback': traceback.format_exc()}
+        err_details = {'error': str(e), 'type': type(e).__name__, 'filtered_file': raw_text_file_path, 'traceback': traceback.format_exc()}
+        logger.error(f"{log_prefix} Attempting to update root task {chain_log_id} with pipeline FAILURE status due to exception. Error details: {err_details}")
         _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 필터링 실패", status=states.FAILURE, error_info=err_details)
-        raise
+        logger.error(f"{log_prefix} Root task {chain_log_id} updated with pipeline FAILURE status.")
+        raise # 파이프라인 실패
 
 @celery_app.task(bind=True, name='celery_tasks.step_4_generate_cover_letter', max_retries=1, default_retry_delay=20)
 def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id: str, user_prompt_text: Optional[str]) -> Dict[str, Any]:
@@ -657,29 +785,47 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             logger.info(f"{log_prefix} Root task {chain_log_id} updated with NO_CONTENT_FOR_COVER_LETTER status.")
             return final_pipeline_result
         
-        logger.info(f"{log_prefix} Calling LLM for cover letter. Text length: {len(filtered_job_text)}, Prompt length: {len(user_prompt_text or '')}")
+        logger.info(f"{log_prefix} Calling LLM for cover letter. Text length: {len(filtered_job_text)}, Prompt length: {len(user_prompt_text if user_prompt_text else '')}")
         
-        # generate_cover_letter_semantic.py의 generate_cover_letter 함수가 dict를 반환한다고 가정
-        # 예: {"cover_letter": "...", "model_name": "..."}
-        llm_cv_data = generate_cover_letter(
-            job_posting_text=filtered_job_text, 
-            user_prompt=user_prompt_text
+        # LLM을 호출하여 자기소개서 생성
+        logger.info(f"{log_prefix} Calling LLM for cover letter. Text length: {len(filtered_job_text)}, Prompt length: {len(user_prompt_text if user_prompt_text else '')}")
+        
+        llm_cv_data_tuple = generate_cover_letter(
+            job_posting_content=filtered_job_text,
+            prompt=user_prompt_text
         )
 
-        generated_cv_text = llm_cv_data.get("cover_letter")
-        if not generated_cv_text or not generated_cv_text.strip():
-            error_msg = "LLM generated empty cover letter."
-            logger.error(f"{log_prefix} {error_msg} LLM output: {llm_cv_data}")
-            _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 자소서 생성 결과 없음", status=states.FAILURE, 
-                                    error_info={'error': error_msg, 'llm_output_details': llm_cv_data})
-            raise ValueError(error_msg) # 파이프라인 실패 처리
-        
-        logger.info(f"{log_prefix} Cover letter generated (length: {len(generated_cv_text)}). Used model: {llm_cv_data.get('model_name', 'N/A')}")
+        # 반환 값 처리 수정: 튜플의 각 요소를 직접 할당
+        generated_cv_text = None
+        formatted_cv_text = None # 초기화 추가
 
-        logs_dir = "logs"
-        os.makedirs(logs_dir, exist_ok=True)
-        base_cv_fn = os.path.splitext(os.path.basename(filtered_text_file_path))[0].replace("_filtered_text","")
-        unique_cv_fn = sanitize_filename(f"{base_cv_fn}_cover_letter_{chain_log_id[:8]}", "txt", ensure_unique=True)
+        if isinstance(llm_cv_data_tuple, tuple) and len(llm_cv_data_tuple) == 2:
+            generated_cv_text, formatted_cv_text = llm_cv_data_tuple
+            logger.info(f"{log_prefix} Successfully unpacked cover letter data from tuple.")
+        elif isinstance(llm_cv_data_tuple, dict): # 혹시 모를 이전 방식 호환성 (하지만 현재 generate_cover_letter_semantic.py는 튜플 반환)
+            generated_cv_text = llm_cv_data_tuple.get("cover_letter")
+            formatted_cv_text = llm_cv_data_tuple.get("formatted_cover_letter")
+            if generated_cv_text is not None: # .get()은 키가 없으면 None을 반환하므로
+                 logger.info(f"{log_prefix} Successfully retrieved cover letter data using .get() from dict (fallback).")
+            else:
+                logger.error(f"{log_prefix} Failed to get 'cover_letter' from dict result: {llm_cv_data_tuple}")
+                # 이 경우 generated_cv_text는 None으로 유지됨
+        else:
+            logger.error(f"{log_prefix} Unexpected format for llm_cv_data: {type(llm_cv_data_tuple)}. Expected tuple of two strings or dict.")
+            # 여기서 에러 처리를 하거나, generated_cv_text와 formatted_cv_text를 None으로 유지
+
+
+        if not generated_cv_text: # None이거나 빈 문자열인 경우
+            logger.error(f"{log_prefix} Cover letter generation failed or returned empty. llm_cv_data: {llm_cv_data_tuple}") # 원본 데이터 로깅
+            # 실패 시, formatted_cv_text에 담긴 오류 메시지(있다면) 또는 일반 메시지를 사용
+            error_message_from_llm = formatted_cv_text if formatted_cv_text else "LLM으로부터 유효한 자기소개서를 받지 못했습니다."
+            raise ValueError(f"자기소개서 생성 실패: {error_message_from_llm}")
+
+        logger.info(f"{log_prefix} Cover letter generated successfully. Raw length: {len(generated_cv_text)}, Formatted length: {len(formatted_cv_text if formatted_cv_text else '')}")
+        
+        # 생성된 자기소개서 파일명 결정 (기존 파일명 활용하여 일관성 유지)
+        base_filename = os.path.splitext(os.path.basename(filtered_text_file_path))[0]
+        unique_cv_fn = sanitize_filename(f"{base_filename}_cover_letter_{chain_log_id[:8]}", "txt", ensure_unique=True)
         cover_letter_file_path_final = os.path.join(logs_dir, unique_cv_fn)
 
         with open(cover_letter_file_path_final, "w", encoding="utf-8") as f:
@@ -692,7 +838,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             "cover_letter_file_path": cover_letter_file_path_final,
             "cover_letter_preview": generated_cv_text[:500] + ("..." if len(generated_cv_text) > 500 else ""),
             "original_url": original_url,
-            "llm_model_used_for_cv": llm_cv_data.get("model_name", "N/A"),
+            "llm_model_used_for_cv": "N/A",
             "intermediate_files": {
                 "html": html_file_path,
                 "raw_text": raw_text_file_path,

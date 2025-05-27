@@ -12,7 +12,7 @@ UPSTASH_REDIS_PASSWORD = os.environ.get('UPSTASH_REDIS_PASSWORD') # 실제 비�
 
 # 로컬 테스트 시 REDIS_URL 환경 변수 또는 직접 Upstash 정보 사용 가능
 # 예: REDIS_URL = "rediss://default:YOUR_PASSWORD@YOUR_UPSTASH_ENDPOINT:YOUR_UPSTASH_PORT"
-LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
 
 if UPSTASH_REDIS_PASSWORD and UPSTASH_REDIS_ENDPOINT and UPSTASH_REDIS_PORT:
     # Cloud Run 환경 또는 Upstash 정보가 모두 제공된 경우
