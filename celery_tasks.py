@@ -952,6 +952,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             "message": "Cover letter generated and saved successfully.",
             "cover_letter_file_path": cover_letter_file_path_final,
             "cover_letter_preview": final_cv_text_to_save[:500] + ("..." if len(final_cv_text_to_save) > 500 else ""),
+            "full_cover_letter_text": final_cv_text_to_save, # 전체 자기소개서 텍스트 추가
             "original_url": original_url,
             "llm_model_used_for_cv": "N/A",
             "intermediate_files": {
