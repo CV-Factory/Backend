@@ -731,17 +731,20 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
                 _update_root_task_state(chain_log_id, f"({step_log_id}) API 키 없음 (GROQ_API_KEY)", status=states.FAILURE, error_info={'error': 'GROQ_API_KEY not set'})
                 raise ValueError("GROQ_API_KEY is not configured.")
 
-            llm_model = os.getenv("GROQ_LLM_MODEL", "llama3-70b-8192") 
+            # 중요: LLM 모델은 아래 명시된 모델을 사용해야 합니다. 변경하지 마십시오.
+            llm_model = os.getenv("GROQ_LLM_MODEL", "meta-llama/llama-4-maverick-17b-128e-instruct") 
             logger.info(f"{log_prefix} Using LLM: {llm_model} via Groq.")
             logger.debug(f"{log_prefix} GROQ_API_KEY: {'*' * (len(groq_api_key) - 4) + groq_api_key[-4:] if groq_api_key else 'Not Set'}") # API 키 일부 마스킹
             
             chat = ChatGroq(temperature=0, groq_api_key=groq_api_key, model_name=llm_model)
             logger.debug(f"{log_prefix} ChatGroq client initialized: {chat}")
-            
-            sys_prompt = ("You are an expert text processing assistant. Your task is to extract ONLY the core job description from the provided text. "
-                          "Remove all extraneous information such as advertisements, company promotions, navigation links, sidebars, headers, footers, legal disclaimers, cookie notices, unrelated articles, and anything not directly related to the job's responsibilities, qualifications, and benefits. "
-                          "Present the output as clean, readable plain text. Do NOT use markdown formatting. Focus on the actual job content. "
-                          "If the text does not appear to be a job posting, or if it is too corrupted to extract meaningful job information, respond with the exact phrase '추출할 채용공고 내용 없음' and nothing else.")
+
+            # 시스템 프롬프트: LLM에게 채용공고 텍스트에서 핵심 내용만 추출하도록 지시 (한국어)
+            sys_prompt = ("당신은 전문적인 텍스트 처리 도우미입니다. 당신의 임무는 제공된 텍스트에서 핵심 채용공고 내용만 추출하는 것입니다. "
+                          "광고, 회사 홍보, 탐색 링크, 사이드바, 헤더, 푸터, 법적 고지, 쿠키 알림, 관련 없는 기사 등 직무의 책임, 자격, 혜택과 직접적인 관련이 없는 모든 불필요한 정보는 제거하십시오. "
+                          "결과는 깨끗하고 읽기 쉬운 일반 텍스트로 제시해야 합니다. 마크다운 형식을 사용하지 마십시오. 실제 채용 내용에 집중하십시오. "
+                          "만약 텍스트가 채용공고가 아닌 것 같거나, 의미 있는 채용 정보를 추출하기에 너무 손상된 경우, 정확히 '추출할 채용공고 내용 없음' 이라는 문구로 응답하고 다른 내용은 포함하지 마십시오. " # 한국어 응답 강제 추가
+                          "모든 응답은 반드시 한국어로 작성되어야 합니다.") # 한국어 응답 강제 명시
             human_template = "{text_content}"
             prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("human", human_template)])
             parser = StrOutputParser()
@@ -887,35 +890,41 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
 
 
         # 반환 값 처리 수정: 튜플의 각 요소를 직접 할당
-        generated_cv_text = None
-        formatted_cv_text = None # 초기화 추가
+        raw_llm_cv_text = None # LLM의 순수 응답
+        formatted_cv_text = None # 후처리된, 구조화된 응답
 
         if isinstance(llm_cv_data_tuple, tuple) and len(llm_cv_data_tuple) == 2:
-            generated_cv_text, formatted_cv_text = llm_cv_data_tuple
-            logger.info(f"{log_prefix} Successfully unpacked cover letter data from tuple.")
-        elif isinstance(llm_cv_data_tuple, dict): # 혹시 모를 이전 방식 호환성 (하지만 현재 generate_cover_letter_semantic.py는 튜플 반환)
-            generated_cv_text = llm_cv_data_tuple.get("cover_letter")
+            raw_llm_cv_text, formatted_cv_text = llm_cv_data_tuple
+            logger.info(f"{log_prefix} Successfully unpacked cover letter data from tuple. Raw length: {len(raw_llm_cv_text if raw_llm_cv_text else '')}, Formatted length: {len(formatted_cv_text if formatted_cv_text else '')}")
+        elif isinstance(llm_cv_data_tuple, dict): 
+            raw_llm_cv_text = llm_cv_data_tuple.get("cover_letter")
             formatted_cv_text = llm_cv_data_tuple.get("formatted_cover_letter")
-            if generated_cv_text is not None: # .get()은 키가 없으면 None을 반환하므로
-                 logger.info(f"{log_prefix} Successfully retrieved cover letter data using .get() from dict (fallback).")
+            if raw_llm_cv_text is not None: 
+                 logger.info(f"{log_prefix} Successfully retrieved cover letter data using .get() from dict (fallback). Raw length: {len(raw_llm_cv_text)}, Formatted length: {len(formatted_cv_text if formatted_cv_text else '')}")
             else:
                 logger.error(f"{log_prefix} Failed to get 'cover_letter' from dict result: {llm_cv_data_tuple}")
-                # 이 경우 generated_cv_text는 None으로 유지됨
         else:
             logger.error(f"{log_prefix} Unexpected format for llm_cv_data: {type(llm_cv_data_tuple)}. Expected tuple of two strings or dict.")
-            # 여기서 에러 처리를 하거나, generated_cv_text와 formatted_cv_text를 None으로 유지
 
-
-        if not generated_cv_text: # None이거나 빈 문자열인 경우
-            logger.error(f"{log_prefix} Cover letter generation failed or returned empty. llm_cv_data: {llm_cv_data_tuple}") # 원본 데이터 로깅
-            # 실패 시, formatted_cv_text에 담긴 오류 메시지(있다면) 또는 일반 메시지를 사용
-            error_message_from_llm = formatted_cv_text if formatted_cv_text else "LLM으로부터 유효한 자기소개서를 받지 못했습니다."
+        # 파일에 저장할 최종 자기소개서 텍스트 결정
+        final_cv_text_to_save = ""
+        if formatted_cv_text and formatted_cv_text.strip():
+            logger.info(f"{log_prefix} Using formatted_cv_text for saving. Length: {len(formatted_cv_text)}")
+            final_cv_text_to_save = formatted_cv_text.strip()
+        elif raw_llm_cv_text and raw_llm_cv_text.strip():
+            logger.warning(f"{log_prefix} formatted_cv_text is empty or None. Falling back to raw_llm_cv_text and applying basic formatting.")
+            # 기본적인 후처리: 연속 공백/개행 정리
+            temp_text = re.sub(r'[ \t\r\f\v]+', ' ', raw_llm_cv_text) # 수평 공백 정규화
+            temp_text = re.sub(r'\s*\n\s*', '\n', temp_text) # 개행 주변 공백 제거
+            temp_text = re.sub(r'\n{2,}', '\n\n', temp_text) # 연속 개행 최대 2개로
+            final_cv_text_to_save = temp_text.strip()
+            logger.info(f"{log_prefix} Applied basic formatting to raw_llm_cv_text. New length: {len(final_cv_text_to_save)}")
+        else:
+            logger.error(f"{log_prefix} Both raw and formatted CV texts are empty or None. Cover letter generation likely failed.")
+            error_message_from_llm = formatted_cv_text if formatted_cv_text else "LLM으로부터 유효한 자기소개서를 받지 못했습니다 (raw/formatted 모두 비어있음)."
             raise ValueError(f"자기소개서 생성 실패: {error_message_from_llm}")
         
-        logger.info(f"{log_prefix} Cover letter generated successfully. Raw length: {len(generated_cv_text)}, Formatted length: {len(formatted_cv_text if formatted_cv_text else '')}")
-        logger.debug(f"{log_prefix} Generated CV text (first 500 chars): {generated_cv_text[:500]}")
-        logger.debug(f"{log_prefix} Formatted CV text (first 500 chars): {(formatted_cv_text[:500] if formatted_cv_text else 'None')}")
-
+        logger.debug(f"{log_prefix} Final CV text to save (first 500 chars): {final_cv_text_to_save[:500]}")
 
         # 생성된 자기소개서 파일명 결정
         logs_dir = "logs"
@@ -933,16 +942,16 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         unique_cv_fn = sanitize_filename(cover_letter_filename_stem, "txt", ensure_unique=True)
         cover_letter_file_path_final = os.path.join(logs_dir, unique_cv_fn)
 
-        logger.debug(f"{log_prefix} Writing final cover letter (length: {len(generated_cv_text)}) to: {cover_letter_file_path_final}")
+        logger.debug(f"{log_prefix} Writing final cover letter (length: {len(final_cv_text_to_save)}) to: {cover_letter_file_path_final}")
         with open(cover_letter_file_path_final, "w", encoding="utf-8") as f:
-            f.write(generated_cv_text)
+            f.write(final_cv_text_to_save)
         logger.info(f"{log_prefix} Cover letter saved to: {cover_letter_file_path_final}")
 
         final_pipeline_result = {
             "status": "SUCCESS",
             "message": "Cover letter generated and saved successfully.",
             "cover_letter_file_path": cover_letter_file_path_final,
-            "cover_letter_preview": generated_cv_text[:500] + ("..." if len(generated_cv_text) > 500 else ""),
+            "cover_letter_preview": final_cv_text_to_save[:500] + ("..." if len(final_cv_text_to_save) > 500 else ""),
             "original_url": original_url,
             "llm_model_used_for_cv": "N/A",
             "intermediate_files": {
