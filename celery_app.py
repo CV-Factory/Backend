@@ -60,6 +60,8 @@ celery_app.conf.update(
 )
 logger.info("Celery app configuration updated.")
 
+app = celery_app # main.py에서 import app 할 수 있도록 추가
+
 if __name__ == '__main__':
     # 이 파일은 직접 실행되지 않고, 'celery -A celery_app.celery_app worker -l info' 와 같이 CLI로 워커를 실행합니다.
     logger.warning("This script is intended to be used by Celery CLI, not executed directly for worker startup.") 

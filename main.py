@@ -1,10 +1,14 @@
+import sys
+sys.path.insert(0, "/app") # 모듈 검색 경로에 /app 추가
+
 import os
 import logging
+import importlib.util # importlib.util 추가
 from fastapi import FastAPI, HTTPException, status, Query, Path
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
-from typing import Any
+from typing import Any, Optional, Dict
 from celery_tasks import process_job_posting_pipeline
 from celery.result import AsyncResult
 import time
@@ -51,6 +55,48 @@ class TaskStatusResponse(BaseModel):
 
 class LogDisplayedCvRequest(BaseModel):
     displayed_text: str
+
+# Celery 애플리케이션 인스턴스를 가져오는 함수 (celery_worker.app 가정)
+# 실제 환경에 맞게 celery_worker.app를 임포트하거나 가져오는 방식을 사용해야 합니다.
+def get_celery_app_instance():
+    logger.info("--- get_celery_app_instance() 호출됨 ---")
+    logger.info(f"현재 작업 디렉토리 (os.getcwd()): {os.getcwd()}")
+    logger.info(f"PYTHONPATH 환경 변수: {os.environ.get('PYTHONPATH')}")
+    logger.info(f"sys.path: {sys.path}")
+    
+    celery_app_py_path = os.path.abspath(os.path.join(os.getcwd(), "celery_app.py"))
+    logger.info(f"celery_app.py 예상 절대 경로: {celery_app_py_path}")
+    logger.info(f"celery_app.py 존재 여부: {os.path.exists(celery_app_py_path)}")
+    
+    spec = importlib.util.find_spec("celery_app")
+    if spec is None:
+        logger.error("'celery_app' 모듈을 찾을 수 없습니다 (importlib.util.find_spec 결과 None).")
+    else:
+        logger.info(f"'celery_app' 모듈 스펙: {spec}")
+        logger.info(f"'celery_app' 모듈 위치 (예상): {spec.origin}")
+
+    try:
+        from celery_app import app as celery_app_instance # 'celery_worker'를 'celery_app'으로 변경
+        logger.info(f"'celery_app' 모듈에서 'app' 임포트 성공. 타입: {type(celery_app_instance)}")
+        return celery_app_instance
+    except ImportError as ie:
+        logger.error(f"'from celery_app import app' 실행 중 ImportError 발생: {ie}", exc_info=True)
+        raise
+    except Exception as e:
+        logger.error(f"'celery_app'에서 'app' 임포트 중 예상치 못한 오류 발생: {e}", exc_info=True)
+        raise
+
+# 로그 출력을 위한 유틸리티 함수
+def try_format_log(data, max_len=200):
+    if data is None:
+        return "None"
+    try:
+        s = str(data)
+        if len(s) > max_len:
+            return s[:max_len] + f"... (len: {len(s)})"
+        return s
+    except Exception:
+        return f"[Unloggable data of type {type(data).__name__}]"
 
 @app.on_event("startup")
 async def startup_event():
@@ -133,125 +179,139 @@ async def start_processing_task(request: ProcessRequest):
 
 @app.get("/tasks/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str):
-    logger.info(f"작업 상태 조회 요청 시작. Task ID: {task_id}")
     start_time = time.time()
+    logger.info(f"작업 상태 조회 요청 시작. Task ID: {task_id}")
     try:
         logger.info(f"AsyncResult 객체 생성 시도. Task ID: {task_id}")
-        task_result = AsyncResult(task_id)
-        
-        logger.info(f"Task ID: {task_id}, 상태 가져오기 시도...")
-        status = task_result.status
-        logger.info(f"Task ID: {task_id}, 상태: {status}")
-
-        result_payload = None
-        current_step_from_meta = None
-
-        if task_result.ready():
-            logger.info(f"Task ID: {task_id}, 작업 준비됨 (ready). 결과 가져오기 시도...")
-            result_payload = task_result.result
-            logger.info(f"Task ID: {task_id}, 결과 가져오기 완료.")
-            if status == 'SUCCESS' and isinstance(result_payload, dict):
-                current_step_from_meta = result_payload.get('current_step', 'Completed')
-            elif status == 'FAILURE':
-                if isinstance(task_result.info, dict):
-                    current_step_from_meta = task_result.info.get('current_step', 'Failed')
-                else:
-                    current_step_from_meta = 'Failed'
-        else:
-            logger.info(f"Task ID: {task_id}, 작업 아직 준비되지 않음 (not ready).")
-            if isinstance(task_result.info, dict):
-                current_step_from_meta = task_result.info.get('current_step')
-            elif status == 'PENDING':
-                current_step_from_meta = 'Pending'
-            elif status == 'STARTED':
-                current_step_from_meta = 'Started'
-
-        response_data = {
-            "task_id": task_id,
-            "status": status,
-            "result": None,
-            "current_step": current_step_from_meta
-        }
-
-        if status == 'SUCCESS':
-            logger.info(f"작업 성공 (Task ID: {task_id})")
-            final_meta = task_result.backend.get_task_meta(task_id)
-            logger.info(f"Task ID: {task_id} SUCCESS. task_result.result (raw): {task_result.result}, type: {type(task_result.result)}")
-            retrieved_meta = task_result.info # task.info is the metadata, typically a dict
-            logger.info(f"Task ID: {task_id} SUCCESS. retrieved_meta (from task.info): {retrieved_meta}, type: {type(retrieved_meta)}")
-
-            response_payload_result = None
-            response_payload_current_step = "파이프라인 성공적으로 완료" # Default for SUCCESS
-
-            if isinstance(retrieved_meta, dict):
-                response_payload_result = retrieved_meta # Pass the whole metadata as the result
-                response_payload_current_step = retrieved_meta.get('current_step', response_payload_current_step)
-                # Ensure the status in the result payload reflects the overall task status if it's different
-                # However, for SUCCESS, retrieved_meta should also indicate success if set by our tasks
-                if 'status' not in response_payload_result or response_payload_result.get('status') != task_result.state:
-                     # Log if meta status differs, but primarily trust task_result.state for the outer TaskStatusResponse
-                    logger.info(f"Task ID: {task_id}, meta status '{response_payload_result.get('status')}' differs from task_result.state '{task_result.state}'. Using task_result.state for outer response.")
-            
-            elif retrieved_meta is not None: # Meta is not a dict but exists
-                logger.error(f"Task ID: {task_id} SUCCESS, but task.info is not a dict. task.info: {retrieved_meta}")
-                response_payload_result = {
-                    "error_message": "결과 메타데이터 형식이 올바르지 않습니다.",
-                    "retrieved_meta_type": str(type(retrieved_meta)),
-                    "retrieved_meta_content": str(retrieved_meta) # Convert to string for logging/display
-                }
-                response_payload_current_step = "오류: 결과 메타데이터 형식 문제"
-            else: # Meta is None
-                logger.error(f"Task ID: {task_id} SUCCESS, but task.info is None.")
-                response_payload_result = {
-                    "error_message": "결과 메타데이터가 존재하지 않습니다."
-                }
-                response_payload_current_step = "오류: 결과 메타데이터 누락"
-            
-            status_to_return = task_result.state # Should be 'SUCCESS'
-
-        elif status in ['PENDING', 'STARTED', 'RETRY']:
-            current_step_from_info = "작업 준비 중이거나 실행 중입니다..."
-            if task_result.info and isinstance(task_result.info, dict):
-                current_step_from_info = task_result.info.get('current_step', current_step_from_info)
-            elif isinstance(task_result.info, str):
-                logger.info(f"Task ID: {task_id} status {status}, info is a string: {task_result.info}. Using default step message.")
-            
-            response_data['current_step'] = current_step_from_info
-            if task_result.result and status != 'SUCCESS':
-                 response_data['result'] = task_result.result
-
-        elif status == 'FAILURE':
-            logger.warning(f"작업 실패 (Task ID: {task_id}). 저장된 결과/예외: {result_payload}")
-            error_detail_to_return = None
-            if isinstance(task_result.info, dict) and 'error_details' in task_result.info:
-                error_detail_to_return = task_result.info['error_details']
-            elif result_payload:
-                error_detail_to_return = {"error": str(result_payload), "type": type(result_payload).__name__, "traceback": task_result.traceback}
-            else:
-                error_detail_to_return = {"error": "Unknown error", "traceback": task_result.traceback}
-            
-            response_data['result'] = error_detail_to_return
-            if not response_data['current_step'] and isinstance(task_result.info, dict):
-                response_data['current_step'] = task_result.info.get('current_step', 'Failed')
-            elif not response_data['current_step']:
-                response_data['current_step'] = 'Failed'
-        elif status in ['PENDING', 'STARTED', 'PROGRESS']:
-            logger.info(f"작업 진행 중 (Task ID: {task_id}, Status: {status}). Meta: {task_result.info}")
-            response_data['result'] = task_result.info if isinstance(task_result.info, dict) else None
-            if not response_data['current_step'] and isinstance(task_result.info, dict):
-                response_data['current_step'] = task_result.info.get('current_step', status)
-            elif not response_data['current_step']:
-                response_data['current_step'] = status
-        
-        end_time = time.time()
-        logger.info(f"작업 상태 조회 완료 (Task ID: {task_id}). 소요 시간: {end_time - start_time:.4f}초. 응답: {response_data}")
-        return TaskStatusResponse(**response_data)
-
+        celery_app_instance = get_celery_app_instance() # celery_app 인스턴스 가져오기
+        task_result = AsyncResult(task_id, app=celery_app_instance) # app 인자 전달
+        logger.info(f"Task ID: {task_id}, AsyncResult 객체 생성 직후. task_result.id: {task_result.id}, task_result.state: {task_result.state}, task_result.backend: {try_format_log(task_result.backend)}")
+    except ModuleNotFoundError as mnfe:
+        logger.error(f"Celery 앱 인스턴스 가져오기 중 ModuleNotFoundError 발생 (Task ID: {task_id}): {mnfe}", exc_info=True)
+        # get_celery_app_instance 내부에서 이미 상세 로깅을 하므로 여기서는 중복 로깅 최소화
+        raise HTTPException(status_code=500, detail=f"Error importing Celery app: {str(mnfe)}")
     except Exception as e:
-        end_time = time.time()
-        logger.error(f"작업 상태 조회 중 심각한 오류 발생 (Task ID: {task_id}): {e}. 소요 시간: {end_time - start_time:.4f}초", exc_info=True)
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=503, detail=f"Error fetching task status for {task_id}. Please try again later.")
+        logger.error(f"AsyncResult 생성 중 오류 발생 (Task ID: {task_id}): {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error creating AsyncResult: {str(e)}")
+
+    response_status = task_result.status
+    logger.info(f"Task ID: {task_id}, task_result.status: {response_status}")
+
+    retrieved_result = None # 이 변수는 이제 직접적인 결과 저장용이 아님
+    retrieved_meta = None # task.info에서 가져올 메타데이터
+
+    if task_result.ready():
+        logger.info(f"Task ID: {task_id}, 작업 준비됨 (ready). task_result.info 직접 접근 시도...")
+        # task_result.get() 호출 제거 또는 주석 처리
+        # try:
+        #     # get() 호출 전 상태 로깅
+        #     logger.info(f"Task ID: {task_id}, BEFORE get(). task_result.result (속성 직접 접근): {try_format_log(task_result.result)}, task_result.info (속성 직접 접근): {try_format_log(task_result.info)}")
+        #     retrieved_result = task_result.get(timeout=1.0) 
+        #     logger.info(f"Task ID: {task_id}, AFTER get(). task_result.result (get() 호출 후 속성): {try_format_log(task_result.result)}, task_result.info (get() 호출 후 속성): {try_format_log(task_result.info)}")
+        #     logger.info(f"Task ID: {task_id}, get()이 반환한 값 (retrieved_result): {try_format_log(retrieved_result)}, type: {type(retrieved_result).__name__}")
+        # except TimeoutError:
+        #     logger.warning(f"Task ID: {task_id}, 결과 가져오기 시간 초과 (timeout=1.0s). 작업이 아직 완료되지 않았을 수 있습니다.")
+        #     # 이 경우에도 response_status는 여전히 이전 상태를 유지할 수 있음 (예: SUCCESS)
+        # except Exception as e:
+        #     logger.error(f"Task ID: {task_id}, 결과 가져오기 중 오류: {e}", exc_info=True)
+        #     retrieved_result = {"error": str(e), "type": type(e).__name__, "message": "결과 가져오기 중 오류 발생"}
+        #     response_status = "FAILURE" # get() 실패 시 FAILURE로 간주
+
+        try:
+            # .info를 직접 사용
+            retrieved_meta = task_result.info 
+            logger.info(f"Task ID: {task_id}, task_result.info (retrieved_meta) 직접 접근 결과: {try_format_log(retrieved_meta)}, type: {type(retrieved_meta).__name__}")
+            
+            # Celery 백엔드에서 결과를 가져온 후 상태가 FAILURE로 변경될 수도 있으므로, 여기서 다시 한번 상태 확인
+            if task_result.failed():
+                logger.warning(f"Task ID: {task_id}, task_result.info 접근 후 .failed()가 True를 반환. 상태를 FAILURE로 갱신합니다.")
+                response_status = "FAILURE"
+            elif task_result.successful(): # 성공 상태도 다시 확인
+                 response_status = "SUCCESS"
+                 if retrieved_meta is None: # 성공했는데 meta가 None이면 문제
+                     logger.error(f"Task ID: {task_id}, 작업은 성공(successful())했으나 task_result.info가 None입니다. 백엔드 저장 문제 가능성.")
+                     # response_status는 SUCCESS로 두되, final_response_payload에서 오류 메시지 처리
+                 
+        except Exception as e:
+            logger.error(f"Task ID: {task_id}, task_result.info 접근 중 오류: {e}", exc_info=True)
+            retrieved_meta = {"error": str(e), "type": type(e).__name__, "message": "메타 정보 접근 중 오류 발생"}
+            response_status = "FAILURE" # info 접근 실패 시 FAILURE로 간주
+
+    # 최종 응답 구성
+    final_response_payload = None
+    current_step_for_response = None
+
+    if response_status == "SUCCESS":
+        logger.info(f"Task ID: {task_id} SUCCESS.")
+        # 최종 결과는 retrieved_meta에 있을 수도 있고, retrieved_result에 직접 있을 수도 있음.
+        # Celery chain의 마지막 태스크가 update_state를 명시적으로 호출하여 info를 채우지 않으면
+        # task.result (retrieved_result)에 최종 결과가 담김.
+        if isinstance(retrieved_meta, dict) and retrieved_meta.get('status') == 'SUCCESS':
+            logger.info(f"Task ID: {task_id} SUCCESS, retrieved_meta가 유효한 결과 객체로 보임: {try_format_log(retrieved_meta)}")
+            final_response_payload = retrieved_meta
+            current_step_for_response = retrieved_meta.get('current_step', '파이프라인 성공적으로 완료')
+        elif retrieved_result is not None and not (isinstance(retrieved_result, dict) and 'error' in retrieved_result):
+            # retrieved_meta가 없거나 SUCCESS 상태가 아니지만, retrieved_result (task.result)에 유효한 결과가 있는 경우
+            logger.info(f"Task ID: {task_id} SUCCESS, retrieved_meta가 없거나 부적절하지만, retrieved_result에 유효한 결과가 있음: {try_format_log(retrieved_result)}")
+            final_response_payload = retrieved_result # task.result를 그대로 사용
+            current_step_for_response = "파이프라인 성공적으로 완료 (결과 직접 반환)"
+            if isinstance(retrieved_result, dict): # 결과가 dict이면 current_step등을 가져와볼 수 있음
+                 current_step_for_response = retrieved_result.get('current_step', current_step_for_response)
+                 if not retrieved_result.get('full_cover_letter_text') and retrieved_result.get('message'): # 주요 결과 필드 확인
+                    logger.warning(f"Task ID: {task_id}, full_cover_letter_text는 없지만 message는 있음. result: {try_format_log(retrieved_result)}")
+            
+        elif retrieved_meta is not None: # retrieved_meta가 있지만 SUCCESS 마커가 없는 경우 (예: 문자열)
+             logger.warning(f"Task ID: {task_id} SUCCESS, 하지만 retrieved_meta의 형식이 예상과 다름: {try_format_log(retrieved_meta)}. retrieved_result: {try_format_log(retrieved_result)}")
+             final_response_payload = retrieved_meta # 일단 meta를 사용
+             current_step_for_response = "파이프라인 완료 (메타데이터 형식 확인 필요)"
+        else: # meta도 없고 result도 없는 경우 (이론상 SUCCESS면 발생하기 어려움)
+            logger.error(f"Task ID: {task_id} SUCCESS, 하지만 retrieved_meta와 retrieved_result가 모두 비어있음. 이는 예상치 못한 상황입니다.")
+            final_response_payload = {"message": "작업은 성공했으나 결과를 찾을 수 없습니다."}
+            current_step_for_response = "결과 없음 (성공)"
+            
+    elif response_status == "FAILURE":
+        logger.warning(f"Task ID: {task_id} FAILURE.")
+        error_details_from_meta = None
+        if isinstance(retrieved_meta, dict):
+            error_details_from_meta = retrieved_meta.get('error_details', retrieved_meta.get('error'))
+            current_step_for_response = retrieved_meta.get('current_step', '작업 실패')
+        
+        if error_details_from_meta:
+            final_response_payload = {"error": error_details_from_meta, "traceback": task_result.traceback}
+        elif isinstance(retrieved_result, dict) and 'error' in retrieved_result: # get()에서 발생한 오류
+            final_response_payload = retrieved_result
+        elif retrieved_result is not None: # task.result가 예외 객체일 수 있음
+             final_response_payload = {"error": str(retrieved_result), "type": type(retrieved_result).__name__, "traceback": task_result.traceback}
+        else: # 정보가 없는 경우
+            final_response_payload = {"error": "알 수 없는 실패", "traceback": task_result.traceback}
+        
+        if not current_step_for_response:
+            current_step_for_response = "작업 실패"
+
+    else: # PENDING, STARTED, RETRY 등
+        logger.info(f"Task ID: {task_id} 작업 진행 중. Status: {response_status}")
+        current_step_for_response = f"작업 진행 중 ({response_status})"
+        if isinstance(retrieved_meta, dict):
+            current_step_for_response = retrieved_meta.get('current_step', current_step_for_response)
+            final_response_payload = retrieved_meta # 진행 중일 때는 meta가 주 정보원
+        elif isinstance(retrieved_meta, str): # 가끔 문자열로 올 때가 있음
+            current_step_for_response = retrieved_meta
+            final_response_payload = {"message": retrieved_meta}
+        else: # meta가 아예 없거나 다른 타입인 경우
+            final_response_payload = {"message": f"현재 상태: {response_status}"}
+
+
+    response_data = {
+        "task_id": task_id,
+        "status": response_status,
+        "result": final_response_payload,
+        "current_step": current_step_for_response
+    }
+
+    end_time = time.time()
+    duration = end_time - start_time
+    logger.info(f"작업 상태 조회 완료 (Task ID: {task_id}). 소요 시간: {duration:.4f}초. 응답: {try_format_log(response_data)}")
+    return response_data
 
 @app.get("/logs/{filename}", response_class=PlainTextResponse)
 async def get_log_file_content(filename: str = Path(..., description="로그 파일 이름", regex="^[a-zA-Z0-9_\\.\\-@]+$")):
