@@ -954,8 +954,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         # LLM을 호출하여 자기소개서 생성
         llm_cv_data_tuple = generate_cover_letter(
             job_posting_content=filtered_job_text,
-            prompt=user_prompt_text,
-            log_identifier_base=f"{log_prefix} SemanticCall" 
+            prompt=user_prompt_text
         )
         logger.debug(f"{log_prefix} LLM (generate_cover_letter) returned: Type={type(llm_cv_data_tuple)}, Value (first 100 chars if str): {str(llm_cv_data_tuple)[:100] if isinstance(llm_cv_data_tuple, (str, tuple, dict)) else type(llm_cv_data_tuple)}")
 
