@@ -177,20 +177,38 @@ async def get_task_status(task_id: str):
             logger.info(f"작업 성공 (Task ID: {task_id})")
             final_meta = task_result.backend.get_task_meta(task_id)
             logger.info(f"Task ID: {task_id} SUCCESS. task_result.result (raw): {task_result.result}, type: {type(task_result.result)}")
-            logger.info(f"Task ID: {task_id} SUCCESS. final_meta (from backend): {final_meta}, type: {type(final_meta)}")
+            retrieved_meta = task_result.info # task.info is the metadata, typically a dict
+            logger.info(f"Task ID: {task_id} SUCCESS. retrieved_meta (from task.info): {retrieved_meta}, type: {type(retrieved_meta)}")
 
-            if isinstance(final_meta, dict):
-                response_data['result'] = final_meta
-                response_data['current_step'] = final_meta.get('current_step', '파이프라인 성공적으로 완료')
-                if 'full_cover_letter_text' in final_meta or final_meta.get('status') == 'NO_CONTENT_FOR_COVER_LETTER':
-                    logger.info(f"Task ID: {task_id} 최종 결과 메타데이터를 response_data.result에 설정합니다.")
-                else:
-                    logger.warning(f"Task ID: {task_id} SUCCESS, final_meta is dict, but may not contain final result keys. Meta: {final_meta}")
-            else:
-                logger.warning(f"Task ID: {task_id} SUCCESS but final_meta is not a dict or is None. Value: {final_meta}. Result will be None.")
-                response_data['result'] = None
-                response_data['current_step'] = response_data.get('current_step') or '파이프라인 완료 (결과 데이터 없음)'
-        
+            response_payload_result = None
+            response_payload_current_step = "파이프라인 성공적으로 완료" # Default for SUCCESS
+
+            if isinstance(retrieved_meta, dict):
+                response_payload_result = retrieved_meta # Pass the whole metadata as the result
+                response_payload_current_step = retrieved_meta.get('current_step', response_payload_current_step)
+                # Ensure the status in the result payload reflects the overall task status if it's different
+                # However, for SUCCESS, retrieved_meta should also indicate success if set by our tasks
+                if 'status' not in response_payload_result or response_payload_result.get('status') != task_result.state:
+                     # Log if meta status differs, but primarily trust task_result.state for the outer TaskStatusResponse
+                    logger.info(f"Task ID: {task_id}, meta status '{response_payload_result.get('status')}' differs from task_result.state '{task_result.state}'. Using task_result.state for outer response.")
+            
+            elif retrieved_meta is not None: # Meta is not a dict but exists
+                logger.error(f"Task ID: {task_id} SUCCESS, but task.info is not a dict. task.info: {retrieved_meta}")
+                response_payload_result = {
+                    "error_message": "결과 메타데이터 형식이 올바르지 않습니다.",
+                    "retrieved_meta_type": str(type(retrieved_meta)),
+                    "retrieved_meta_content": str(retrieved_meta) # Convert to string for logging/display
+                }
+                response_payload_current_step = "오류: 결과 메타데이터 형식 문제"
+            else: # Meta is None
+                logger.error(f"Task ID: {task_id} SUCCESS, but task.info is None.")
+                response_payload_result = {
+                    "error_message": "결과 메타데이터가 존재하지 않습니다."
+                }
+                response_payload_current_step = "오류: 결과 메타데이터 누락"
+            
+            status_to_return = task_result.state # Should be 'SUCCESS'
+
         elif status in ['PENDING', 'STARTED', 'RETRY']:
             current_step_from_info = "작업 준비 중이거나 실행 중입니다..."
             if task_result.info and isinstance(task_result.info, dict):
