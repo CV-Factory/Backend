@@ -649,9 +649,9 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         logger.debug(f"{log_prefix} Normalized text (first 500 chars): {text[:500]}")
 
         # Now, convert to single line for 50-char formatting
-        logger.debug(f"{log_prefix} Converting to single line by replacing ACTUAL NEWLINES (\n) with SPACES.")
-        text_single_line = text.replace('\n', ' ') # Replace ACTUAL newlines with a space
-        text_single_line = re.sub(r'\s+', ' ', text_single_line).strip() # Consolidate any multiple spaces that formed
+        logger.debug(f"{log_prefix} Converting to single line by replacing ALL whitespace characters (including preserved newlines) with SPACES.")
+        # 모든 종류의 공백 문자 (개행 포함)를 단일 공백으로 변환하여 text_single_line 생성
+        text_single_line = re.sub(r'\s+', ' ', text).strip()
         logger.info(f"{log_prefix} Text converted to single line. Length: {len(text_single_line)}")
         logger.debug(f"{log_prefix} Single line text (first 500 chars): {text_single_line[:500]}")
 
