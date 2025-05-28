@@ -494,9 +494,16 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
         logger.info(f"{log_prefix} HTML content successfully saved to {html_file_path}.")
 
         result_data = {"html_file_path": html_file_path, "original_url": url, "page_content": page_content} # page_content 추가
+        
+        # 로깅을 위해 result_data의 page_content를 축약된 정보로 대체
+        result_data_for_log = result_data.copy()
+        if 'page_content' in result_data_for_log:
+            page_content_len = len(result_data_for_log['page_content']) if result_data_for_log['page_content'] is not None else 0
+            result_data_for_log['page_content'] = f"<page_content_omitted_from_log, length={page_content_len}>"
+
         _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 및 저장 완료", details={'html_file_path': html_file_path})
-        logger.info(f"{log_prefix} ---------- Task finished successfully. Result: {result_data} ----------")
-        logger.debug(f"{log_prefix} Returning from step_1: {result_data}")
+        logger.info(f"{log_prefix} ---------- Task finished successfully. Result for log: {result_data_for_log} ----------") # 수정된 로깅
+        logger.debug(f"{log_prefix} Returning from step_1: keys={list(result_data.keys())}, page_content length: {len(result_data.get('page_content', '')) if result_data.get('page_content') else 0}")
         return result_data
 
     except Reject as e_reject: # 명시적으로 Reject된 경우, Celery가 재시도 또는 실패 처리
@@ -529,29 +536,40 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
 @celery_app.task(bind=True, name='celery_tasks.step_2_extract_text', max_retries=1, default_retry_delay=5)
 def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) -> Dict[str, str]:
     """(2단계) 저장된 HTML 파일에서 텍스트를 추출하여 새 파일에 저장합니다."""
+    # root_task_id = self.request.root_id # root_id는 chain_log_id로 전달받으므로 중복
     task_id = self.request.id
-    step_log_id = "2_extract_text"
+    step_log_id = "2_extract_text" # step_log_id 정의
+    # chain_log_id = get_chain_log_id(self.request) # chain_log_id는 이미 인자로 받으므로 이 줄 삭제
     log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id}]"
-    logger.info(f"{log_prefix} ---------- Task started. Received prev_result: {prev_result} ----------")
-    logger.debug(f"{log_prefix} Input prev_result: {prev_result}, Chain Log ID: {chain_log_id}")
+    logger.info(f"{log_prefix} ---------- Task started. Received prev_result_keys: {list(prev_result.keys()) if isinstance(prev_result, dict) else type(prev_result)} ----------")
+
+    if not isinstance(prev_result, dict) or 'page_content' not in prev_result or 'html_file_path' not in prev_result or 'original_url' not in prev_result:
+        error_msg = f"Invalid or incomplete prev_result: {prev_result}. Expected a dict with 'page_content', 'html_file_path', and 'original_url'."
+        logger.error(f"{log_prefix} {error_msg}")
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 오류: 이전 단계 결과 형식 오류", status=states.FAILURE, error_info={'error': error_msg}) # error -> error_info, status 추가
+        raise ValueError(error_msg)
+
+    html_content = prev_result.get('page_content')
+    html_file_path = prev_result.get('html_file_path')
+    original_url = prev_result.get('original_url')
+
+    # 입력 데이터 로깅 (page_content는 길이만 로깅)
+    prev_result_for_log = prev_result.copy()
+    if 'page_content' in prev_result_for_log:
+        page_content_len = len(prev_result_for_log['page_content']) if prev_result_for_log['page_content'] is not None else 0
+        prev_result_for_log['page_content'] = f"<page_content_omitted_from_log, length={page_content_len}>"
+    logger.info(f"{log_prefix} Received from previous step (for log): {prev_result_for_log}")
     
-    html_file_path = None
-    original_url = "N/A"
-    page_content = None # page_content 받을 변수 추가
+    if not html_content:
+        error_msg = f"Page content is missing from previous step result: {prev_result.keys()}"
+        logger.error(f"{log_prefix} {error_msg}")
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 이전 단계 HTML 내용 없음", status=states.FAILURE, error_info={'error': error_msg})
+        raise ValueError(error_msg)
+
+    # 다음 로직을 위한 extracted_text_file_path 초기화
+    extracted_text_file_path = None 
+
     try:
-        # html_file_path는 로깅 및 파일명 생성에만 사용, 실제 내용은 page_content에서 가져옴
-        html_file_path = prev_result.get("html_file_path") 
-        original_url = prev_result.get("original_url", "N/A")
-        page_content = prev_result.get("page_content") # page_content 가져오기
-
-        logger.info(f"{log_prefix} Received html_file_path: {html_file_path}, original_url: {original_url}, page_content length: {len(page_content) if page_content else 'N/A'}")
-
-        if not page_content:
-            error_msg = f"Page content is missing from previous step result: {prev_result.keys()}"
-            logger.error(f"{log_prefix} {error_msg}")
-            _update_root_task_state(chain_log_id, f"({step_log_id}) 이전 단계 HTML 내용 없음", status=states.FAILURE, error_info={'error': error_msg})
-            raise ValueError(error_msg)
-
         # html_file_path 유효성 검사는 파일 저장 시에만 필요할 수 있으나, 로깅을 위해 유지
         if not html_file_path or not isinstance(html_file_path, str):
             logger.warning(f"{log_prefix} html_file_path is invalid ({html_file_path}), will use placeholder for saving text file if needed, but proceeding with page_content.")
@@ -561,11 +579,11 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
             base_html_fn_for_saving = os.path.splitext(os.path.basename(html_file_path))[0]
             base_html_fn_for_saving = re.sub(r'_raw_html_[a-f0-9]{8}_[a-f0-9]{8}$', '', base_html_fn_for_saving) # 고유 ID 패턴 수정
 
-        logger.info(f"{log_prefix} Starting text extraction from page_content (length: {len(page_content)})")
+        logger.info(f"{log_prefix} Starting text extraction from page_content (length: {len(html_content)})")
         _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 내용에서 텍스트 추출 시작", details={'current_task_id': task_id})
 
-        extracted_text_file_path = None # 초기화
-        html_content = page_content # 파일에서 읽는 대신 직접 사용
+        # extracted_text_file_path = None # 초기화 (위로 이동)
+        # html_content = page_content # 이미 html_content 변수에 할당되어 있음
 
         # 이전의 파일 읽기 로직은 제거합니다.
         # logger.debug(f"{log_prefix} Attempting to read HTML file content from: {html_file_path}")
@@ -653,7 +671,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         logger.debug(f"{log_prefix} Final extracted text for saving (first 500 chars): {text[:500]}")
 
         if not text:
-            logger.warning(f"{log_prefix} No text extracted after processing from {html_file_path}. Resulting file will be empty or placeholder.")
+            logger.warning(f"{log_prefix} No text extracted after processing from {html_file_path if html_file_path else 'direct content'}. Resulting file will be empty or placeholder.")
             # 빈 텍스트도 파일로 저장하고 다음 단계로 넘길 수 있도록 처리 (필요시)
             # 또는 여기서 특정 오류를 발생시킬 수도 있음. 현재는 경고 후 진행.
         
@@ -719,7 +737,14 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
     task_id = self.request.id
     step_log_id = "3_filter_content"
     log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id}]"
-    
+    logger.info(f"{log_prefix} ---------- Task started. Received prev_result_keys: {list(prev_result.keys()) if isinstance(prev_result, dict) else type(prev_result)} ----------")
+
+    if not isinstance(prev_result, dict) or "extracted_text" not in prev_result:
+        error_msg = f"Invalid or incomplete prev_result: {prev_result}. Expected a dict with 'extracted_text'."
+        logger.error(f"{log_prefix} {error_msg}")
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 오류: 이전 단계 결과 형식 오류 ('extracted_text' 누락)", status=states.FAILURE, error_info={'error': error_msg})
+        raise ValueError(error_msg)
+        
     raw_text_file_path = prev_result.get("text_file_path") # 파일명 생성 및 로깅용
     original_url = prev_result.get("original_url", "N/A")
     html_file_path = prev_result.get("html_file_path") # 로깅/추적용
@@ -1036,31 +1061,77 @@ def process_job_posting_pipeline(self, url: str, user_prompt: Optional[str] = No
                             details={'url': url, 'user_prompt_provided': bool(user_prompt)})
     logger.debug(f"{log_prefix} Root task state updated to STARTED.")
 
-    # Celery 체인 정의 (가장 일반적이고 이해하기 쉬운 형태):
+    # Celery 체인 정의:
+    # 각 단계는 chain_log_id로 root_task_id를 명시적으로 전달받습니다.
     s1 = step_1_extract_html.s(url=url, chain_log_id=root_task_id)
-    s2 = step_2_extract_text.s(chain_log_id=root_task_id)
-    s3 = step_3_filter_content.s(chain_log_id=root_task_id)
-    s4 = step_4_generate_cover_letter.s(chain_log_id=root_task_id, user_prompt_text=user_prompt) # user_prompt_text는 명시적 kwargs로 전달
-    logger.debug(f"{log_prefix} Sub-task signatures defined: s1={s1}, s2={s2}, s3={s3}, s4={s4}")
+    s2 = step_2_extract_text.s(chain_log_id=root_task_id) 
+    s3 = step_3_filter_content.s(chain_log_id=root_task_id) # user_prompt는 prev_result에서 오지 않음, step_4에서 사용됨
+    s4 = step_4_generate_cover_letter.s(user_prompt_text=user_prompt, chain_log_id=root_task_id) # original_url은 prev_result에서 전달됨
     
-    processing_chain_final = chain(s1, s2, s3, s4)
+    logger.debug(f"{log_prefix} Sub-task signatures defined: s1={s1.name}, s2={s2.name}, s3={s3.name}, s4={s4.name}")
+    
+    # s3는 user_prompt를 인자로 직접 받지 않고, s4가 받습니다.
+    # process_job_posting_pipeline에서 user_prompt를 s4로 전달해야 합니다.
+    # 체인 구성 시, s(arg)는 다음 태스크의 *첫 번째* 인자로 전달될 값을 설정합니다.
+    # 이전 태스크의 결과(딕셔너리)가 다음 태스크의 첫 번째 인자(prev_result)로 자동 전달됩니다.
+    # 따라서 s2, s3는 추가 인자 없이 .s()만으로도 충분합니다 (chain_log_id 제외).
+    # s4는 user_prompt_text를 추가로 받아야 합니다. 이는 s4.s(user_prompt_text=user_prompt, ...) 형태로 명시해야 합니다.
+
+    # 수정된 체인 정의:
+    # s1 = step_1_extract_html.s(url=url, chain_log_id=root_task_id)
+    # s2 = step_2_extract_text.s(chain_log_id=root_task_id)
+    # s3 = step_3_filter_content.s(chain_log_id=root_task_id) 
+    # s4 = step_4_generate_cover_letter.s(user_prompt_text=user_prompt, chain_log_id=root_task_id)
+    # 위 정의는 각 s()가 '고정' 인수를 설정하는 방식입니다.
+    # 체인에서는 이전 결과가 다음 s의 첫 번째 인자로 넘어갑니다.
+    # step_3_filter_content 시그니처: (self, prev_result: Dict[str, str], chain_log_id: str)
+    # step_4_generate_cover_letter 시그니처: (self, prev_result: Dict[str, Any], chain_log_id: str, user_prompt_text: Optional[str])
+
+    # 따라서, chain_log_id와 user_prompt_text는 partial로 고정하거나,
+    # .s()를 호출할 때 올바른 위치에 전달되도록 해야 합니다.
+    # 현재 .s(chain_log_id=root_task_id)는 chain_log_id를 키워드 인자로 고정합니다.
+    # user_prompt_text는 s4에만 필요합니다.
+
+    immutable_s1 = step_1_extract_html.s(url=url, chain_log_id=root_task_id)
+    immutable_s2 = step_2_extract_text.s(chain_log_id=root_task_id)
+    immutable_s3 = step_3_filter_content.s(chain_log_id=root_task_id)
+    immutable_s4 = step_4_generate_cover_letter.s(chain_log_id=root_task_id, user_prompt_text=user_prompt) # user_prompt_text 위치 수정
+    
+    logger.debug(f"{log_prefix} Sub-task signatures (immutable): s1={immutable_s1}, s2={immutable_s2}, s3={immutable_s3}, s4={immutable_s4}")
+    
+    processing_chain_final = chain(immutable_s1, immutable_s2, immutable_s3, immutable_s4)
     logger.debug(f"{log_prefix} Chain object created: {processing_chain_final}")
 
     # 체인 구조 로깅 개선
-    chain_structure_log = f"{s1.name}(...) | {s2.name}(...) | {s3.name}(...) | {s4.name}(...)"
+    chain_structure_log = f"{immutable_s1.name}(url, chain_log_id) | {immutable_s2.name}(chain_log_id) | {immutable_s3.name}(chain_log_id) | {immutable_s4.name}(chain_log_id, user_prompt_text)"
     logger.info(f"{log_prefix} Celery chain structure defined: {chain_structure_log}")
-    logger.info(f"{log_prefix} Full chain object: {processing_chain_final}") # 전체 체인 객체도 로깅
+    logger.info(f"{log_prefix} Full chain object: {processing_chain_final}")
 
-    # 임시 테스트 코드 제거하고 원래 체인 실행 로직으로 복원
     try:
-        chain_async_result = processing_chain_final.apply_async()
+        chain_async_result = processing_chain_final.apply_async(task_id=root_task_id)
         logger.info(f"{log_prefix} Dispatched chain. Last task ID in chain: {chain_async_result.id}. Polling root ID: {root_task_id}")
+        # chain_async_result.id는 체인의 마지막 작업 ID임.
+        # root_task_id (self.request.id)는 이 파이프라인 요청 자체의 ID.
         logger.debug(f"{log_prefix} Chain dispatched. AsyncResult ID: {chain_async_result.id}, Parent ID: {chain_async_result.parent.id if chain_async_result.parent else 'None'}. Root Task ID for this pipeline run: {root_task_id}")
         logger.debug(f"{log_prefix} Returning root_task_id: {root_task_id} from process_job_posting_pipeline.")
         return root_task_id # 파이프라인의 루트 ID 반환
-        
+
     except Exception as e_chain_dispatch:
         logger.error(f"{log_prefix} Failed to dispatch chain: {e_chain_dispatch}", exc_info=True)
         err_details = {'error': str(e_chain_dispatch), 'type': type(e_chain_dispatch).__name__, 'traceback': traceback.format_exc()}
         _update_root_task_state(root_task_id, "파이프라인 실행 실패 (요청단계)", status=states.FAILURE, error_info=err_details)
         raise # FastAPI가 500 에러 반환하도록 함
+
+# Utility function to get chain_log_id - 더 이상 사용되지 않으므로 삭제
+# def get_chain_log_id(request_context):
+#     if request_context.parent_id:
+#         return request_context.root_id or request_context.parent_id or request_context.id
+#     return request_context.id
+
+# 이 파일의 맨 끝이나 다른 유틸리티 모듈로 이동 가능
+def get_detailed_error_info(exception_obj: Exception) -> Dict[str, str]:
+    return {
+        'type': type(exception_obj).__name__,
+        'message': str(exception_obj),
+        'traceback': traceback.format_exc()
+    }
