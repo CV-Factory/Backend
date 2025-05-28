@@ -881,173 +881,195 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
 
 @celery_app.task(bind=True, name='celery_tasks.step_4_generate_cover_letter', max_retries=1, default_retry_delay=20)
 def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id: str, user_prompt_text: Optional[str]) -> Dict[str, Any]:
-    """(4단계) 필터링된 텍스트와 사용자 프롬프트를 사용하여 자기소개서를 생성하고 최종 결과를 반환합니다."""
-    task_id = self.request.id
-    step_log_id = "4_generate_cover_letter"
-    log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id}]"
-    logger.info(f"{log_prefix} ---------- Task started. Received prev_result: {prev_result}, User Prompt: {'Provided' if user_prompt_text else 'N/A'} ----------")
-    logger.debug(f"{log_prefix} Input prev_result: {prev_result}, Chain Log ID: {chain_log_id}, User Prompt Text: {user_prompt_text[:100] if user_prompt_text else 'None'}")
+    current_task_id = self.request.id
+    root_task_id = self.request.root_id or current_task_id # 체인의 일부로 실행될 경우 root_id 사용
+    step_log_prefix = f"[Task {current_task_id} / Root {root_task_id} / Step 4_generate_cover_letter]"
+    logger.info(f"{step_log_prefix} ---------- Task started. Received prev_result: { {k: (v[:100] + '...' if isinstance(v, str) and len(v) > 100 else v) for k, v in prev_result.items()} }, User Prompt: {'Provided' if user_prompt_text else 'Not provided'} ----------")
 
-    filtered_text_file_path = prev_result.get("filtered_text_file_path")
-    original_url = prev_result.get("original_url", "N/A")
-    html_file_path = prev_result.get("html_file_path")
-    raw_text_file_path = prev_result.get("raw_text_file_path")
-    filtered_job_text = prev_result.get("filtered_content") # 실제 내용
-
-    if not filtered_job_text:
-        # filtered_text_file_path가 없을 수도 있으므로, filtered_job_text 기준으로 오류 처리
-        error_msg = f"Filtered content is missing from previous step result: {prev_result.keys()}"
-        logger.error(f"{log_prefix} {error_msg}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 이전 단계 필터링된 내용 없음", status=states.FAILURE, error_info={'error': error_msg})
-        raise ValueError(error_msg)
-
-    # filtered_text_file_path는 파일 저장 시 이름 기반으로 사용될 수 있으므로 유효성 검사 또는 생성 로직 필요
-    # 이 값은 로깅이나 결과에 포함될 수 있음
-    if not filtered_text_file_path or not isinstance(filtered_text_file_path, str):
-        logger.warning(f"{log_prefix} filtered_text_file_path is invalid ({filtered_text_file_path}). Cover letter file name will be based on URL/Chain ID.")
-        # 파일명 생성을 위한 fallback
-        base_cv_fn_for_saving = sanitize_filename(original_url if original_url != "N/A" else "unknown_filtered_source", ensure_unique=False) + f"_{chain_log_id[:8]}"
-    else:
-        # 기존 filtered_text_file_path에서 base 부분을 가져오려고 시도
-        base_cv_fn_for_saving = os.path.splitext(os.path.basename(filtered_text_file_path))[0].replace("_filtered_text","")
-
-    logger.info(f"{log_prefix} Starting cover letter generation. Filtered text length: {len(filtered_job_text)}, User prompt: {'Yes' if user_prompt_text else 'No'}. Associated filtered_text_file_path for logging: {filtered_text_file_path}")
-    _update_root_task_state(chain_log_id, f"({step_log_id}) 자기소개서 생성 시작", 
-                            details={'user_prompt': bool(user_prompt_text), 'current_task_id': task_id})
-    
-    cover_letter_file_path_final = None # 최종 자소서 파일 경로
     try:
-        # 이전의 파일 읽기 로직은 제거합니다.
-        # logger.debug(f"{log_prefix} Reading filtered job text from: {filtered_text_file_path}")
-        # with open(filtered_text_file_path, "r", encoding="utf-8") as f:
-        #     filtered_job_text = f.read()
-        logger.debug(f"{log_prefix} Filtered job text from prev_result (length: {len(filtered_job_text)}). Filtered job text (first 500 chars): {filtered_job_text[:500]}")
+        filtered_content = prev_result.get('filtered_content', '')
+        original_url = prev_result.get('original_url', '')
+        html_file_path = prev_result.get('html_file_path', '') # 로그용
+        raw_text_file_path = prev_result.get('raw_text_file_path', '') # 로그용
+        filtered_text_file_path = prev_result.get('filtered_text_file_path', '') # 로그용
+        
+        # 이전 단계들에서 수집된 status_history를 가져오거나 초기화
+        status_history = prev_result.get('status_history', [])
+        status_history.append({'step': 'Step 4 Initiated', 'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat()})
 
-        if not filtered_job_text.strip() or \
-           filtered_job_text.strip().startswith("<!-- LLM 분석:") or \
-           filtered_job_text.strip().startswith("<!-- 원본 텍스트 내용 없음 -->"):
-            
-            warning_msg = f"Filtered text empty or placeholder: '{filtered_job_text[:100]}'. Cover letter cannot be generated."
-            logger.warning(f"{log_prefix} {warning_msg}")
-            # 이것은 파이프라인 실패가 아니라, 내용이 없어 자소서 생성을 못한 경우이므로 SUCCESS로 처리
-            final_pipeline_result = {
-                "status": "NO_CONTENT_FOR_COVER_LETTER",
-                "message": warning_msg,
-                "cover_letter": "",
-                "cover_letter_file_path": None,
-                "original_url": original_url,
-                "intermediate_files": {
-                    "html": html_file_path,
-                    "raw_text": raw_text_file_path,
-                    "filtered_text": filtered_text_file_path
+
+        if not filtered_content:
+            logger.warning(f"{step_log_prefix} Filtered content is empty. Skipping cover letter generation.")
+            error_message = "Filtered content was empty, cannot generate cover letter."
+            _update_root_task_state(
+                root_task_id, 
+                current_step_message=f"(4_generate_cover_letter) 실패: {error_message}",
+                status=states.FAILURE, # 이 단계는 실패했지만, 파이프라인 자체는 여기서 중단될 수 있음
+                details={'error': error_message, 'step_failed': 'step_4_generate_cover_letter'}
+            )
+            # 실패 시에도 정의된 Dict 구조로 반환하여 일관성 유지
+            return {
+                'status': 'FAILURE',
+                'message': error_message,
+                'error_details': {'step': 'step_4_generate_cover_letter', 'reason': error_message},
+                'cover_letter_file_path': None,
+                'full_cover_letter_text': None,
+                'original_url': original_url,
+                'status_history': status_history,
+                'intermediate_files': {
+                    'html': html_file_path,
+                    'raw_text': raw_text_file_path,
+                    'filtered_text': filtered_text_file_path
                 }
             }
-            logger.info(f"{log_prefix} Attempting to update root task {chain_log_id} with NO_CONTENT_FOR_COVER_LETTER status. Details: {final_pipeline_result}")
-            _update_root_task_state(chain_log_id, "파이프라인 완료 (자소서 생성 불가: 내용 부족)", status=states.SUCCESS, details=final_pipeline_result)
-            logger.info(f"{log_prefix} Root task {chain_log_id} updated with NO_CONTENT_FOR_COVER_LETTER status.")
-            return final_pipeline_result
+
+        _update_root_task_state(root_task_id, current_step_message=f"(4_generate_cover_letter) 자기소개서 생성 시작", details={'user_prompt': bool(user_prompt_text), 'current_task_id': current_task_id})
         
-        logger.info(f"{log_prefix} Calling LLM for cover letter. Text length: {len(filtered_job_text)}, Prompt length: {len(user_prompt_text if user_prompt_text else '')}")
-        logger.debug(f"{log_prefix} Job posting content for LLM (first 500 chars): {filtered_job_text[:500]}")
-        logger.debug(f"{log_prefix} User prompt for LLM: {user_prompt_text[:200] if user_prompt_text else 'None'}")
+        logger.info(f"{step_log_prefix} Starting cover letter generation. Filtered text length: {len(filtered_content)}, User prompt: {'Yes' if user_prompt_text else 'No'}. Associated filtered_text_file_path for logging: {filtered_text_file_path}")
+
+        # generate_cover_letter_semantic.py의 함수 호출
+        logger.info(f"{step_log_prefix} Calling LLM for cover letter. Text length: {len(filtered_content)}, Prompt length: {len(user_prompt_text) if user_prompt_text else 0}")
         
-        # LLM을 호출하여 자기소개서 생성
-        llm_cv_data_tuple = generate_cover_letter(
-            job_posting_content=filtered_job_text,
-            prompt=user_prompt_text
+        # generate_cover_letter 함수는 (raw_cv_text, formatted_cv_text, model_name) 튜플을 반환
+        raw_cv_text, formatted_cv_text, model_name = generate_cover_letter(
+            filtered_content, 
+            user_prompt_text,
+            max_retries=2, # LLM 호출 재시도 횟수
+            log_identifier_base=f"{step_log_prefix} SemanticCall" # 로그 식별자
         )
-        logger.debug(f"{log_prefix} LLM (generate_cover_letter) returned: Type={type(llm_cv_data_tuple)}, Value (first 100 chars if str): {str(llm_cv_data_tuple)[:100] if isinstance(llm_cv_data_tuple, (str, tuple, dict)) else type(llm_cv_data_tuple)}")
-
-
-        # 반환 값 처리 수정: 튜플의 각 요소를 직접 할당
-        raw_llm_cv_text = None # LLM의 순수 응답
-        formatted_cv_text = None # 후처리된, 구조화된 응답
-
-        if isinstance(llm_cv_data_tuple, tuple) and len(llm_cv_data_tuple) == 2:
-            raw_llm_cv_text, formatted_cv_text = llm_cv_data_tuple
-            logger.info(f"{log_prefix} Successfully unpacked cover letter data from tuple. Raw length: {len(raw_llm_cv_text if raw_llm_cv_text else '')}, Formatted length: {len(formatted_cv_text if formatted_cv_text else '')}")
-        elif isinstance(llm_cv_data_tuple, dict): 
-            raw_llm_cv_text = llm_cv_data_tuple.get("cover_letter")
-            formatted_cv_text = llm_cv_data_tuple.get("formatted_cover_letter")
-            if raw_llm_cv_text is not None: 
-                 logger.info(f"{log_prefix} Successfully retrieved cover letter data using .get() from dict (fallback). Raw length: {len(raw_llm_cv_text)}, Formatted length: {len(formatted_cv_text if formatted_cv_text else '')}")
-            else:
-                logger.error(f"{log_prefix} Failed to get 'cover_letter' from dict result: {llm_cv_data_tuple}")
+        
+        # formatted_cv_text (구조화된 텍스트)가 있다면 우선 사용, 없다면 raw_cv_text 사용
+        final_cv_text_to_save = formatted_cv_text if formatted_cv_text else raw_cv_text
+        
+        if final_cv_text_to_save:
+             logger.info(f"{step_log_prefix} Successfully unpacked cover letter data. Raw length: {len(raw_cv_text or '')}, Formatted length: {len(formatted_cv_text or '')}")
+             logger.info(f"{step_log_prefix} Using {'formatted_cv_text' if formatted_cv_text else 'raw_cv_text'} for saving. Length: {len(final_cv_text_to_save)}")
         else:
-            logger.error(f"{log_prefix} Unexpected format for llm_cv_data: {type(llm_cv_data_tuple)}. Expected tuple of two strings or dict.")
+            logger.warning(f"{step_log_prefix} Both raw and formatted CV text are empty after generation.")
+            # 이 경우에도 실패로 처리하거나, 빈 문자열로 진행할 수 있음. 여기서는 빈 문자열로 진행.
+            final_cv_text_to_save = "" # 또는 에러 처리
 
-        # 파일에 저장할 최종 자기소개서 텍스트 결정
-        final_cv_text_to_save = ""
-        if formatted_cv_text and formatted_cv_text.strip():
-            logger.info(f"{log_prefix} Using formatted_cv_text for saving. Length: {len(formatted_cv_text)}")
-            final_cv_text_to_save = formatted_cv_text.strip()
-        elif raw_llm_cv_text and raw_llm_cv_text.strip():
-            logger.warning(f"{log_prefix} formatted_cv_text is empty or None. Falling back to raw_llm_cv_text and applying basic formatting.")
-            # 기본적인 후처리: 연속 공백/개행 정리
-            temp_text = re.sub(r'[ \t\r\f\v]+', ' ', raw_llm_cv_text) # 수평 공백 정규화
-            temp_text = re.sub(r'\s*\n\s*', '\n', temp_text) # 개행 주변 공백 제거
-            temp_text = re.sub(r'\n{2,}', '\n\n', temp_text) # 연속 개행 최대 2개로
-            final_cv_text_to_save = temp_text.strip()
-            logger.info(f"{log_prefix} Applied basic formatting to raw_llm_cv_text. New length: {len(final_cv_text_to_save)}")
-        else:
-            logger.error(f"{log_prefix} Both raw and formatted CV texts are empty or None. Cover letter generation likely failed.")
-            error_message_from_llm = formatted_cv_text if formatted_cv_text else "LLM으로부터 유효한 자기소개서를 받지 못했습니다 (raw/formatted 모두 비어있음)."
-            raise ValueError(f"자기소개서 생성 실패: {error_message_from_llm}")
+
+        # 파일명 생성 (기존 파일명에 추가 정보 결합 또는 새 고유 ID 사용)
+        # 여기서는 filtered_text_file_path의 기반 이름을 사용하여 연관성을 유지하되, 고유성을 보장합니다.
+        base_name_for_cv = sanitize_filename(original_url, ensure_unique=False) # URL 기반의 기본 이름
+        if filtered_text_file_path: # 필터링된 파일 경로가 있다면, 그 파일의 고유 ID 부분을 활용
+            # 예: logs/jobkorea..._filtered_text_abcdef12.txt -> jobkorea..._filtered_text_abcdef12
+            match = re.search(r'^(.*_filtered_text_[a-f0-9]+)(\.txt)?$', os.path.basename(filtered_text_file_path), re.IGNORECASE)
+            if match:
+                base_name_for_cv = match.group(1)
         
-        logger.debug(f"{log_prefix} Final CV text to save (first 500 chars): {final_cv_text_to_save[:500]}")
-
-        # 생성된 자기소개서 파일명 결정
-        logs_dir = "logs"
-        os.makedirs(logs_dir, exist_ok=True)
-
-        # 원본 URL과 chain_log_id를 기반으로 파일명 생성 (base_cv_fn_for_saving 사용)
-        # url_for_base = original_url if isinstance(original_url, str) else "unknown_url"
-        # URL에서 기본적인 파일명 부분을 추출 (여기서는 해시나 확장자 없이)
-        # temp_base_from_url = sanitize_filename(url_for_base, extension="", ensure_unique=False)
+        # 최종 자기소개서 파일명 (고유 ID 추가)
+        cv_file_name_unique_id = uuid.uuid4().hex[:8]
+        cover_letter_filename = f"{base_name_for_cv}_coverletter_{cv_file_name_unique_id}.txt"
         
-        # 자기소개서 파일용 최종 스템 구성
-        cover_letter_filename_stem = f"{base_cv_fn_for_saving}_coverletter" # base_cv_fn_for_saving 사용
-        
-        # 최종적으로 고유한 파일명 생성 (해시 및 확장자 포함)
-        unique_cv_fn = sanitize_filename(cover_letter_filename_stem, "txt", ensure_unique=True)
-        cover_letter_file_path_final = os.path.join(logs_dir, unique_cv_fn)
+        # 파일 저장 디렉토리 설정 (logs 디렉토리는 존재한다고 가정)
+        log_dir = "logs"
+        os.makedirs(log_dir, exist_ok=True)
+        cover_letter_file_path = os.path.join(log_dir, cover_letter_filename)
 
-        logger.debug(f"{log_prefix} Writing final cover letter (length: {len(final_cv_text_to_save)}) to: {cover_letter_file_path_final}")
-        with open(cover_letter_file_path_final, "w", encoding="utf-8") as f:
+        with open(cover_letter_file_path, 'w', encoding='utf-8') as f:
             f.write(final_cv_text_to_save)
-        logger.info(f"{log_prefix} Cover letter saved to: {cover_letter_file_path_final}")
+        logger.info(f"{step_log_prefix} Cover letter saved to: {cover_letter_file_path}")
+        
+        status_history.append({'step': 'Step 4 Completed - CV Generated', 'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'file': cover_letter_file_path})
 
-        final_pipeline_result = {
-            "status": "SUCCESS",
-            "message": "Cover letter generated and saved successfully.",
-            "cover_letter_file_path": cover_letter_file_path_final,
-            "cover_letter_preview": final_cv_text_to_save[:500] + ("..." if len(final_cv_text_to_save) > 500 else ""),
-            "full_cover_letter_text": final_cv_text_to_save, # 전체 자기소개서 텍스트 추가
-            "original_url": original_url,
-            "llm_model_used_for_cv": "N/A",
-            "intermediate_files": {
-                "html": html_file_path,
-                "raw_text": raw_text_file_path,
-                "filtered_text": filtered_text_file_path
+        # 최종 결과 구성
+        pipeline_result = {
+            'status': 'SUCCESS',
+            'message': 'Cover letter generated and saved successfully.',
+            'cover_letter_file_path': cover_letter_file_path,
+            'cover_letter_preview': (final_cv_text_to_save[:200] + '...') if len(final_cv_text_to_save) > 200 else final_cv_text_to_save,
+            'full_cover_letter_text': final_cv_text_to_save, # 전체 자기소개서 텍스트 포함
+            'original_url': original_url,
+            'llm_model_used_for_cv': model_name, # 자기소개서 생성에 사용된 모델 (또는 N/A)
+            'intermediate_files': { # 중간 파일 경로들
+                'html': html_file_path,
+                'raw_text': raw_text_file_path,
+                'filtered_text': filtered_text_file_path
+            },
+            'status_history': status_history, # 상태 이력 추가
+            # 작업 체인의 마지막 작업이므로, 여기에 최종 상태 업데이트 정보를 포함시킬 수 있습니다.
+            # Celery는 체인의 마지막 작업의 반환값을 체인 전체의 결과로 간주합니다.
+            # 따라서 이 return 값이 process_job_posting_pipeline 태스크의 결과가 됩니다.
+        }
+        
+        logger.info(f"{step_log_prefix} Attempting to update root task {root_task_id} with pipeline SUCCESS status. Details: { {k: (v[:100] + '...' if isinstance(v, str) and len(v) > 100 else v) for k, v in pipeline_result.items()} }")
+
+        # 루트 작업 상태 업데이트 (성공) - 여기서 meta에 최종 결과를 넣어줍니다.
+        _update_root_task_state(
+            root_task_id, 
+            current_step_message="파이프라인 성공적으로 완료",
+            status=states.SUCCESS, # 최종 상태는 SUCCESS
+            details=pipeline_result # 여기에도 전체 결과를 넣어 task.info에서도 접근 가능하도록 함
+        )
+        logger.info(f"{step_log_prefix} Root task {root_task_id} updated with pipeline SUCCESS status.")
+        
+        # 함수에서 최종 결과 반환
+        return pipeline_result
+
+    except MaxRetriesExceededError as e_max_retries:
+        error_message = f"LLM call max retries exceeded during cover letter generation: {e_max_retries}"
+        logger.error(f"{step_log_prefix} {error_message}", exc_info=True)
+        # ... (이하 에러 처리 및 반환 로직은 기존과 유사하게 유지하되, 최종 pipeline_result 구조를 반환하도록 함) ...
+        detailed_error_info = get_detailed_error_info(e_max_retries)
+        _update_root_task_state(root_task_id, current_step_message=f"(4_generate_cover_letter) 실패: {error_message}", status=states.FAILURE, error_info=detailed_error_info)
+        return {
+            'status': 'FAILURE',
+            'message': error_message,
+            'error_details': detailed_error_info,
+            'cover_letter_file_path': None,
+            'full_cover_letter_text': None,
+            'original_url': prev_result.get('original_url'),
+             'status_history': prev_result.get('status_history', []) + [{'step': 'Step 4 Failed - MaxRetries', 'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'error': error_message}],
+            'intermediate_files': {
+                'html': prev_result.get('html_file_path'),
+                'raw_text': prev_result.get('raw_text_file_path'),
+                'filtered_text': prev_result.get('filtered_text_file_path')
             }
         }
-        logger.info(f"{log_prefix} Attempting to update root task {chain_log_id} with pipeline SUCCESS status. Details: {final_pipeline_result}")
-        _update_root_task_state(chain_log_id, "파이프라인 성공적으로 완료", status=states.SUCCESS, details=final_pipeline_result)
-        logger.info(f"{log_prefix} Root task {chain_log_id} updated with pipeline SUCCESS status.")
-        logger.debug(f"{log_prefix} Returning from step_4 (final pipeline result): {final_pipeline_result}")
-        return final_pipeline_result # 이것이 체인의 최종 결과가 됨
-        
+    except Reject as e_reject: # 명시적 Reject 예외 처리
+        error_message = f"Task rejected during cover letter generation: {e_reject.reason}"
+        logger.error(f"{step_log_prefix} {error_message}", exc_info=True)
+        detailed_error_info = get_detailed_error_info(e_reject)
+        detailed_error_info['reason'] = e_reject.reason
+        _update_root_task_state(root_task_id, current_step_message=f"(4_generate_cover_letter) 명시적 거부: {e_reject.reason}", status=states.FAILURE, error_info=detailed_error_info)
+        return {
+            'status': 'FAILURE',
+            'message': error_message,
+            'error_details': detailed_error_info,
+            'cover_letter_file_path': None,
+            'full_cover_letter_text': None,
+            'original_url': prev_result.get('original_url'),
+            'status_history': prev_result.get('status_history', []) + [{'step': 'Step 4 Failed - Rejected', 'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'error': error_message}],
+            'intermediate_files': {
+                'html': prev_result.get('html_file_path'),
+                'raw_text': prev_result.get('raw_text_file_path'),
+                'filtered_text': prev_result.get('filtered_text_file_path')
+            }
+        }
     except Exception as e:
-        logger.error(f"{log_prefix} Error in cover letter generation: {e}", exc_info=True)
-        if cover_letter_file_path_final and os.path.exists(cover_letter_file_path_final):
-            try: os.remove(cover_letter_file_path_final)
-            except Exception as e_remove: logger.warning(f"{log_prefix} Failed to remove partial CV file {cover_letter_file_path_final}: {e_remove}")
-        
-        err_details = {'error': str(e), 'type': type(e).__name__, 'filtered_file': raw_text_file_path, 'traceback': traceback.format_exc()}
-        logger.error(f"{log_prefix} Attempting to update root task {chain_log_id} with pipeline FAILURE status due to exception. Error details: {err_details}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 자소서 생성 실패", status=states.FAILURE, error_info=err_details)
-        logger.error(f"{log_prefix} Root task {chain_log_id} updated with pipeline FAILURE status.")
-        raise # 파이프라인 실패
+        error_message = f"Unexpected error in step_4_generate_cover_letter: {str(e)}"
+        logger.error(f"{step_log_prefix} {error_message}", exc_info=True)
+        # ... (이하 에러 처리 및 반환 로직은 기존과 유사하게 유지하되, 최종 pipeline_result 구조를 반환하도록 함) ...
+        detailed_error_info = get_detailed_error_info(e)
+        _update_root_task_state(root_task_id, current_step_message=f"(4_generate_cover_letter) 예상치 못한 오류: {error_message[:100]}...", status=states.FAILURE, error_info=detailed_error_info)
+        return {
+            'status': 'FAILURE',
+            'message': error_message,
+            'error_details': detailed_error_info,
+            'cover_letter_file_path': None,
+            'full_cover_letter_text': None,
+            'original_url': prev_result.get('original_url'),
+            'status_history': prev_result.get('status_history', []) + [{'step': 'Step 4 Failed - Unexpected', 'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'error': error_message}],
+            'intermediate_files': {
+                'html': prev_result.get('html_file_path'),
+                'raw_text': prev_result.get('raw_text_file_path'),
+                'filtered_text': prev_result.get('filtered_text_file_path')
+            }
+        }
+    finally:
+        logger.info(f"{step_log_prefix} ---------- Task execution attempt ended. ----------")
 
 @celery_app.task(bind=True, name='celery_tasks.process_job_posting_pipeline', max_retries=0)
 def process_job_posting_pipeline(self, job_posting_url: str, user_prompt: Optional[str] = None) -> None: # user_prompt 타입을 Optional[str]로 명시적으로 변경

@@ -188,7 +188,6 @@ async def get_task_status(task_id: str):
         logger.info(f"Task ID: {task_id}, AsyncResult 객체 생성 직후. task_result.id: {task_result.id}, task_result.state: {task_result.state}, task_result.backend: {try_format_log(task_result.backend)}")
     except ModuleNotFoundError as mnfe:
         logger.error(f"Celery 앱 인스턴스 가져오기 중 ModuleNotFoundError 발생 (Task ID: {task_id}): {mnfe}", exc_info=True)
-        # get_celery_app_instance 내부에서 이미 상세 로깅을 하므로 여기서는 중복 로깅 최소화
         raise HTTPException(status_code=500, detail=f"Error importing Celery app: {str(mnfe)}")
     except Exception as e:
         logger.error(f"AsyncResult 생성 중 오류 발생 (Task ID: {task_id}): {e}", exc_info=True)
@@ -197,121 +196,134 @@ async def get_task_status(task_id: str):
     response_status = task_result.status
     logger.info(f"Task ID: {task_id}, task_result.status: {response_status}")
 
-    retrieved_result = None # 이 변수는 이제 직접적인 결과 저장용이 아님
-    retrieved_meta = None # task.info에서 가져올 메타데이터
+    final_result_for_response: Any = None
+    current_step_for_response: Optional[str] = None
 
     if task_result.ready():
-        logger.info(f"Task ID: {task_id}, 작업 준비됨 (ready). task_result.info 직접 접근 시도...")
-        # task_result.get() 호출 제거 또는 주석 처리
-        # try:
-        #     # get() 호출 전 상태 로깅
-        #     logger.info(f"Task ID: {task_id}, BEFORE get(). task_result.result (속성 직접 접근): {try_format_log(task_result.result)}, task_result.info (속성 직접 접근): {try_format_log(task_result.info)}")
-        #     retrieved_result = task_result.get(timeout=1.0) 
-        #     logger.info(f"Task ID: {task_id}, AFTER get(). task_result.result (get() 호출 후 속성): {try_format_log(task_result.result)}, task_result.info (get() 호출 후 속성): {try_format_log(task_result.info)}")
-        #     logger.info(f"Task ID: {task_id}, get()이 반환한 값 (retrieved_result): {try_format_log(retrieved_result)}, type: {type(retrieved_result).__name__}")
-        # except TimeoutError:
-        #     logger.warning(f"Task ID: {task_id}, 결과 가져오기 시간 초과 (timeout=1.0s). 작업이 아직 완료되지 않았을 수 있습니다.")
-        #     # 이 경우에도 response_status는 여전히 이전 상태를 유지할 수 있음 (예: SUCCESS)
-        # except Exception as e:
-        #     logger.error(f"Task ID: {task_id}, 결과 가져오기 중 오류: {e}", exc_info=True)
-        #     retrieved_result = {"error": str(e), "type": type(e).__name__, "message": "결과 가져오기 중 오류 발생"}
-        #     response_status = "FAILURE" # get() 실패 시 FAILURE로 간주
+        logger.info(f"Task ID: {task_id}, 작업 준비됨 (ready). 결과/메타 정보 가져오기 시도...")
+        
+        retrieved_result_direct = None
+        retrieved_meta = None
+        exception_from_get = None
 
         try:
-            # .info를 직접 사용
-            retrieved_meta = task_result.info 
-            logger.info(f"Task ID: {task_id}, task_result.info (retrieved_meta) 직접 접근 결과: {try_format_log(retrieved_meta)}, type: {type(retrieved_meta).__name__}")
+            # 1. task_result.result (Celery 작업의 직접 반환 값)
+            # step_4_generate_cover_letter가 성공하면 여기에 pipeline_result 딕셔너리가 있어야 함
+            retrieved_result_direct = task_result.result
+            logger.info(f"Task ID: {task_id}, task_result.result (직접 접근): {try_format_log(retrieved_result_direct)}, type: {type(retrieved_result_direct).__name__}")
+            if isinstance(retrieved_result_direct, dict) and retrieved_result_direct.get('status') == 'SUCCESS':
+                logger.info(f"Task ID: {task_id}, task_result.result에서 유효한 성공 결과 확인됨.")
+                final_result_for_response = retrieved_result_direct
+                current_step_for_response = retrieved_result_direct.get('current_step', "파이프라인 성공 (결과에서 추출)")
+            elif isinstance(retrieved_result_direct, dict) and retrieved_result_direct.get('status') == 'FAILURE':
+                 logger.warning(f"Task ID: {task_id}, task_result.result에서 실패 결과 확인됨: {try_format_log(retrieved_result_direct)}")
+                 final_result_for_response = retrieved_result_direct
+                 current_step_for_response = retrieved_result_direct.get('error_details', {}).get('step', "파이프라인 실패 (결과에서 추출)")
+                 response_status = "FAILURE" # 상태를 FAILURE로 명확히 설정
+
+        except Exception as e_result:
+            logger.error(f"Task ID: {task_id}, task_result.result 접근 중 오류: {e_result}", exc_info=True)
+            # 오류 발생 시에도 계속 진행하여 다른 방법으로 결과 조회 시도
+
+        # 2. task_result.info (update_state로 저장된 메타데이터 - fallback 또는 보조 정보로 사용)
+        # final_result_for_response가 아직 None이고, response_status가 FAILURE가 아닐 때만 info를 주 결과로 고려
+        if final_result_for_response is None and response_status != "FAILURE":
+            try:
+                retrieved_meta = task_result.info
+                logger.info(f"Task ID: {task_id}, task_result.info (retrieved_meta) 접근: {try_format_log(retrieved_meta)}, type: {type(retrieved_meta).__name__}")
+                if isinstance(retrieved_meta, dict):
+                    # info에 있는 current_step을 우선 사용
+                    current_step_for_response = retrieved_meta.get('current_step', current_step_for_response)
+                    # info에 SUCCESS 결과가 있고, result에 없었다면 이것을 사용
+                    if retrieved_meta.get('status') == 'SUCCESS' and retrieved_meta.get('full_cover_letter_text') is not None:
+                        logger.info(f"Task ID: {task_id}, task_result.info에서 유효한 성공 결과 확인됨 (result는 비어있었음).")
+                        final_result_for_response = retrieved_meta 
+                    elif retrieved_meta.get('status') == 'FAILURE':
+                        logger.warning(f"Task ID: {task_id}, task_result.info에서 실패 상태 확인됨: {try_format_log(retrieved_meta)}")
+                        final_result_for_response = retrieved_meta # 실패 정보라도 전달
+                        response_status = "FAILURE"
+            except Exception as e_info:
+                logger.error(f"Task ID: {task_id}, task_result.info 접근 중 오류: {e_info}", exc_info=True)
+
+        # 3. 작업 실패 시 처리 (task_result.result 또는 task_result.info에 실패 정보가 있을 수 있음)
+        if response_status == "FAILURE":
+            if final_result_for_response is None: # result나 info에서 명시적인 실패 구조체를 못 찾았다면
+                logger.warning(f"Task ID: {task_id}, 상태는 FAILURE이나 task_result.result/info에 명시적 실패 내용 없음. traceback 시도.")
+                try:
+                    # task_result.get()은 실패 시 예외를 반환하거나, propagate=False면 예외 객체를 반환
+                    exception_from_get = task_result.get(propagate=False)
+                    if isinstance(exception_from_get, Exception):
+                        logger.error(f"Task ID: {task_id}, task_result.get()에서 예외 객체 반환됨: {exception_from_get}")
+                        final_result_for_response = {
+                            'status': 'FAILURE',
+                            'message': f"작업 실패: {str(exception_from_get)}",
+                            'error_details': {'type': type(exception_from_get).__name__, 'reason': str(exception_from_get), 'traceback': task_result.traceback}
+                        }
+                    elif exception_from_get is not None: # 예외는 아니지만 뭔가 반환된 경우 (드묾)
+                         logger.warning(f"Task ID: {task_id}, task_result.get()이 실패 상태에서 예외 아닌 값 반환: {try_format_log(exception_from_get)}")
+                         final_result_for_response = {
+                            'status': 'FAILURE',
+                            'message': "작업 실패 (원인 불명)",
+                            'details_from_get': try_format_log(exception_from_get)
+                         }
+                    else: # get()도 None 반환
+                        final_result_for_response = {
+                            'status': 'FAILURE',
+                            'message': "작업 실패 (결과/정보 없음)",
+                            'traceback': task_result.traceback # 트레이스백이라도 포함
+                        }
+                except Exception as e_get_failure:
+                    logger.error(f"Task ID: {task_id}, 실패 상태에서 task_result.get() 호출 중 추가 오류: {e_get_failure}", exc_info=True)
+                    final_result_for_response = {'status': 'FAILURE', 'message': f"작업 실패 처리 중 오류: {str(e_get_failure)}"}
             
-            # Celery 백엔드에서 결과를 가져온 후 상태가 FAILURE로 변경될 수도 있으므로, 여기서 다시 한번 상태 확인
-            if task_result.failed():
-                logger.warning(f"Task ID: {task_id}, task_result.info 접근 후 .failed()가 True를 반환. 상태를 FAILURE로 갱신합니다.")
-                response_status = "FAILURE"
-            elif task_result.successful(): # 성공 상태도 다시 확인
-                 response_status = "SUCCESS"
-                 if retrieved_meta is None: # 성공했는데 meta가 None이면 문제
-                     logger.error(f"Task ID: {task_id}, 작업은 성공(successful())했으나 task_result.info가 None입니다. 백엔드 저장 문제 가능성.")
-                     # response_status는 SUCCESS로 두되, final_response_payload에서 오류 메시지 처리
-                 
-        except Exception as e:
-            logger.error(f"Task ID: {task_id}, task_result.info 접근 중 오류: {e}", exc_info=True)
-            retrieved_meta = {"error": str(e), "type": type(e).__name__, "message": "메타 정보 접근 중 오류 발생"}
-            response_status = "FAILURE" # info 접근 실패 시 FAILURE로 간주
+            # current_step_for_response가 FAILURE 시에도 설정되도록
+            if isinstance(final_result_for_response, dict) and final_result_for_response.get('error_details'):
+                current_step_for_response = final_result_for_response['error_details'].get('step', "실패 발생")
+            elif current_step_for_response is None:
+                 current_step_for_response = "작업 실패"
 
-    # 최종 응답 구성
-    final_response_payload = None
-    current_step_for_response = None
+        # 최종적으로 final_result_for_response가 설정되지 않은 경우 (예: PENDING, STARTED 등)
+        if final_result_for_response is None:
+            if response_status == "SUCCESS": # 성공인데 결과가 없는 이상한 경우
+                logger.error(f"Task ID: {task_id}, 상태는 SUCCESS이나 result와 info 모두에서 유효한 결과를 찾을 수 없음.")
+                final_result_for_response = {'message': '작업은 성공했으나 결과를 찾을 수 없습니다.'}
+                current_step_for_response = current_step_for_response or "결과 없음 (성공)"
+            elif response_status not in ["FAILURE", "SUCCESS"]:
+                # PENDING, STARTED, RETRY 등
+                # info에서 가져온 current_step 사용 시도
+                if retrieved_meta and isinstance(retrieved_meta, dict) and 'current_step' in retrieved_meta:
+                    current_step_for_response = retrieved_meta['current_step']
+                else: # current_step을 알 수 없으면 상태명 그대로 사용
+                    current_step_for_response = current_step_for_response or response_status 
+                final_result_for_response = {'message': f'작업 상태: {response_status}'}
+            # 실패 경우는 이미 위에서 처리됨
 
-    if response_status == "SUCCESS":
-        logger.info(f"Task ID: {task_id} SUCCESS.")
-        # 최종 결과는 retrieved_meta에 있을 수도 있고, retrieved_result에 직접 있을 수도 있음.
-        # Celery chain의 마지막 태스크가 update_state를 명시적으로 호출하여 info를 채우지 않으면
-        # task.result (retrieved_result)에 최종 결과가 담김.
-        if isinstance(retrieved_meta, dict) and retrieved_meta.get('status') == 'SUCCESS':
-            logger.info(f"Task ID: {task_id} SUCCESS, retrieved_meta가 유효한 결과 객체로 보임: {try_format_log(retrieved_meta)}")
-            final_response_payload = retrieved_meta
-            current_step_for_response = retrieved_meta.get('current_step', '파이프라인 성공적으로 완료')
-        elif retrieved_result is not None and not (isinstance(retrieved_result, dict) and 'error' in retrieved_result):
-            # retrieved_meta가 없거나 SUCCESS 상태가 아니지만, retrieved_result (task.result)에 유효한 결과가 있는 경우
-            logger.info(f"Task ID: {task_id} SUCCESS, retrieved_meta가 없거나 부적절하지만, retrieved_result에 유효한 결과가 있음: {try_format_log(retrieved_result)}")
-            final_response_payload = retrieved_result # task.result를 그대로 사용
-            current_step_for_response = "파이프라인 성공적으로 완료 (결과 직접 반환)"
-            if isinstance(retrieved_result, dict): # 결과가 dict이면 current_step등을 가져와볼 수 있음
-                 current_step_for_response = retrieved_result.get('current_step', current_step_for_response)
-                 if not retrieved_result.get('full_cover_letter_text') and retrieved_result.get('message'): # 주요 결과 필드 확인
-                    logger.warning(f"Task ID: {task_id}, full_cover_letter_text는 없지만 message는 있음. result: {try_format_log(retrieved_result)}")
-            
-        elif retrieved_meta is not None: # retrieved_meta가 있지만 SUCCESS 마커가 없는 경우 (예: 문자열)
-             logger.warning(f"Task ID: {task_id} SUCCESS, 하지만 retrieved_meta의 형식이 예상과 다름: {try_format_log(retrieved_meta)}. retrieved_result: {try_format_log(retrieved_result)}")
-             final_response_payload = retrieved_meta # 일단 meta를 사용
-             current_step_for_response = "파이프라인 완료 (메타데이터 형식 확인 필요)"
-        else: # meta도 없고 result도 없는 경우 (이론상 SUCCESS면 발생하기 어려움)
-            logger.error(f"Task ID: {task_id} SUCCESS, 하지만 retrieved_meta와 retrieved_result가 모두 비어있음. 이는 예상치 못한 상황입니다.")
-            final_response_payload = {"message": "작업은 성공했으나 결과를 찾을 수 없습니다."}
-            current_step_for_response = "결과 없음 (성공)"
-            
-    elif response_status == "FAILURE":
-        logger.warning(f"Task ID: {task_id} FAILURE.")
-        error_details_from_meta = None
-        if isinstance(retrieved_meta, dict):
-            error_details_from_meta = retrieved_meta.get('error_details', retrieved_meta.get('error'))
-            current_step_for_response = retrieved_meta.get('current_step', '작업 실패')
-        
-        if error_details_from_meta:
-            final_response_payload = {"error": error_details_from_meta, "traceback": task_result.traceback}
-        elif isinstance(retrieved_result, dict) and 'error' in retrieved_result: # get()에서 발생한 오류
-            final_response_payload = retrieved_result
-        elif retrieved_result is not None: # task.result가 예외 객체일 수 있음
-             final_response_payload = {"error": str(retrieved_result), "type": type(retrieved_result).__name__, "traceback": task_result.traceback}
-        else: # 정보가 없는 경우
-            final_response_payload = {"error": "알 수 없는 실패", "traceback": task_result.traceback}
-        
-        if not current_step_for_response:
-            current_step_for_response = "작업 실패"
-
-    else: # PENDING, STARTED, RETRY 등
-        logger.info(f"Task ID: {task_id} 작업 진행 중. Status: {response_status}")
-        current_step_for_response = f"작업 진행 중 ({response_status})"
-        if isinstance(retrieved_meta, dict):
-            current_step_for_response = retrieved_meta.get('current_step', current_step_for_response)
-            final_response_payload = retrieved_meta # 진행 중일 때는 meta가 주 정보원
-        elif isinstance(retrieved_meta, str): # 가끔 문자열로 올 때가 있음
-            current_step_for_response = retrieved_meta
-            final_response_payload = {"message": retrieved_meta}
-        else: # meta가 아예 없거나 다른 타입인 경우
-            final_response_payload = {"message": f"현재 상태: {response_status}"}
-
-
-    response_data = {
-        "task_id": task_id,
-        "status": response_status,
-        "result": final_response_payload,
-        "current_step": current_step_for_response
-    }
+    else: # task_result.ready() is False (작업 진행 중)
+        logger.info(f"Task ID: {task_id}, 작업 아직 진행 중 (PENDING 또는 STARTED, RETRY 등).")
+        # 진행 중일 때 task_result.info에서 current_step 가져오기 시도
+        try:
+            retrieved_meta_pending = task_result.info
+            if isinstance(retrieved_meta_pending, dict) and 'current_step' in retrieved_meta_pending:
+                current_step_for_response = retrieved_meta_pending['current_step']
+                logger.info(f"Task ID: {task_id}, 진행 중 상태. Info에서 current_step: '{current_step_for_response}'")
+            else:
+                current_step_for_response = response_status # PENDING, STARTED 등
+                logger.info(f"Task ID: {task_id}, 진행 중 상태. Info에 current_step 없음. 상태명 사용: '{current_step_for_response}'")
+        except Exception as e_info_pending:
+            logger.warning(f"Task ID: {task_id}, 진행 중 상태에서 info 읽기 실패: {e_info_pending}. 상태명 사용.")
+            current_step_for_response = response_status
+        final_result_for_response = {'message': f'작업 진행 중: {current_step_for_response}'}
 
     end_time = time.time()
     duration = end_time - start_time
-    logger.info(f"작업 상태 조회 완료 (Task ID: {task_id}). 소요 시간: {duration:.4f}초. 응답: {try_format_log(response_data)}")
-    return response_data
+    logger.info(f"작업 상태 조회 완료 (Task ID: {task_id}). 소요 시간: {duration:.4f}초. 응답: {{'task_id': task_id, 'status': response_status, 'result': try_format_log(final_result_for_response), 'current_step': current_step_for_response}}")
+    
+    return TaskStatusResponse(
+        task_id=task_id,
+        status=response_status,
+        result=final_result_for_response,
+        current_step=current_step_for_response
+    )
 
 @app.get("/logs/{filename}", response_class=PlainTextResponse)
 async def get_log_file_content(filename: str = Path(..., description="로그 파일 이름", regex="^[a-zA-Z0-9_\\.\\-@]+$")):
