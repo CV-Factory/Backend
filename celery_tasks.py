@@ -1047,91 +1047,71 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         logger.error(f"{log_prefix} Root task {chain_log_id} updated with pipeline FAILURE status.")
         raise # 파이프라인 실패
 
-@celery_app.task(bind=True, name='celery_tasks.process_job_posting_pipeline')
-def process_job_posting_pipeline(self, url: str, user_prompt: Optional[str] = None) -> str:
-    """전체 채용공고 처리 파이프라인: HTML 추출 -> 텍스트 추출 -> 내용 필터링 -> 자기소개서 생성"""
-    root_task_id = self.request.id # 이 ID가 chain_log_id로 사용됨
-    log_prefix = f"[Pipeline / Root {root_task_id}]"
-    logger.info(f"{log_prefix} Initiating pipeline for URL: {url}, User Prompt: {'Provided' if user_prompt else 'N/A'}")
-    logger.debug(f"{log_prefix} Root Task ID (self.request.id): {root_task_id}")
-    logger.debug(f"{log_prefix} URL: {url}, User Prompt (first 100 chars): {user_prompt[:100] if user_prompt else 'N/A'}")
+@celery_app.task(bind=True, name='celery_tasks.process_job_posting_pipeline', max_retries=0)
+def process_job_posting_pipeline(self, job_posting_url: str, user_prompt: Optional[str] = None) -> None: # user_prompt 타입을 Optional[str]로 명시적으로 변경
+    """사용자로부터 채용공고 URL을 받아 Celery 파이프라인을 시작하고, 루트 태스크 ID를 반환합니다."""
+    chain_log_id = self.request.id  # 이 태스크 자체의 ID를 chain_log_id 및 root_task_id로 사용
+    log_prefix = f"[PipelineTask {chain_log_id} / Root {chain_log_id}]"
+    logger.info(f"{log_prefix} ---------- Pipeline task process_job_posting_pipeline started. URL: {job_posting_url}, User Prompt provided: {user_prompt is not None} ----------")
+    if user_prompt:
+        logger.info(f"{log_prefix} User Prompt (first 100 chars): {user_prompt[:100]}")
 
 
-    _update_root_task_state(root_task_id, "파이프라인 시작됨", status=states.STARTED, 
-                            details={'url': url, 'user_prompt_provided': bool(user_prompt)})
-    logger.debug(f"{log_prefix} Root task state updated to STARTED.")
-
-    # Celery 체인 정의:
-    # 각 단계는 chain_log_id로 root_task_id를 명시적으로 전달받습니다.
-    s1 = step_1_extract_html.s(url=url, chain_log_id=root_task_id)
-    s2 = step_2_extract_text.s(chain_log_id=root_task_id) 
-    s3 = step_3_filter_content.s(chain_log_id=root_task_id) # user_prompt는 prev_result에서 오지 않음, step_4에서 사용됨
-    s4 = step_4_generate_cover_letter.s(user_prompt_text=user_prompt, chain_log_id=root_task_id) # original_url은 prev_result에서 전달됨
-    
-    logger.debug(f"{log_prefix} Sub-task signatures defined: s1={s1.name}, s2={s2.name}, s3={s3.name}, s4={s4.name}")
-    
-    # s3는 user_prompt를 인자로 직접 받지 않고, s4가 받습니다.
-    # process_job_posting_pipeline에서 user_prompt를 s4로 전달해야 합니다.
-    # 체인 구성 시, s(arg)는 다음 태스크의 *첫 번째* 인자로 전달될 값을 설정합니다.
-    # 이전 태스크의 결과(딕셔너리)가 다음 태스크의 첫 번째 인자(prev_result)로 자동 전달됩니다.
-    # 따라서 s2, s3는 추가 인자 없이 .s()만으로도 충분합니다 (chain_log_id 제외).
-    # s4는 user_prompt_text를 추가로 받아야 합니다. 이는 s4.s(user_prompt_text=user_prompt, ...) 형태로 명시해야 합니다.
-
-    # 수정된 체인 정의:
-    # s1 = step_1_extract_html.s(url=url, chain_log_id=root_task_id)
-    # s2 = step_2_extract_text.s(chain_log_id=root_task_id)
-    # s3 = step_3_filter_content.s(chain_log_id=root_task_id) 
-    # s4 = step_4_generate_cover_letter.s(user_prompt_text=user_prompt, chain_log_id=root_task_id)
-    # 위 정의는 각 s()가 '고정' 인수를 설정하는 방식입니다.
-    # 체인에서는 이전 결과가 다음 s의 첫 번째 인자로 넘어갑니다.
-    # step_3_filter_content 시그니처: (self, prev_result: Dict[str, str], chain_log_id: str)
-    # step_4_generate_cover_letter 시그니처: (self, prev_result: Dict[str, Any], chain_log_id: str, user_prompt_text: Optional[str])
-
-    # 따라서, chain_log_id와 user_prompt_text는 partial로 고정하거나,
-    # .s()를 호출할 때 올바른 위치에 전달되도록 해야 합니다.
-    # 현재 .s(chain_log_id=root_task_id)는 chain_log_id를 키워드 인자로 고정합니다.
-    # user_prompt_text는 s4에만 필요합니다.
-
-    immutable_s1 = step_1_extract_html.s(url=url, chain_log_id=root_task_id)
-    immutable_s2 = step_2_extract_text.s(chain_log_id=root_task_id)
-    immutable_s3 = step_3_filter_content.s(chain_log_id=root_task_id)
-    immutable_s4 = step_4_generate_cover_letter.s(chain_log_id=root_task_id, user_prompt_text=user_prompt) # user_prompt_text 위치 수정
-    
-    logger.debug(f"{log_prefix} Sub-task signatures (immutable): s1={immutable_s1}, s2={immutable_s2}, s3={immutable_s3}, s4={immutable_s4}")
-    
-    processing_chain_final = chain(immutable_s1, immutable_s2, immutable_s3, immutable_s4)
-    logger.debug(f"{log_prefix} Chain object created: {processing_chain_final}")
-
-    # 체인 구조 로깅 개선
-    chain_structure_log = f"{immutable_s1.name}(url, chain_log_id) | {immutable_s2.name}(chain_log_id) | {immutable_s3.name}(chain_log_id) | {immutable_s4.name}(chain_log_id, user_prompt_text)"
-    logger.info(f"{log_prefix} Celery chain structure defined: {chain_structure_log}")
-    logger.info(f"{log_prefix} Full chain object: {processing_chain_final}")
+    # 루트 태스크의 초기 상태 설정
+    initial_meta = {
+        'current_step': '파이프라인 초기화 중...',
+        'original_url': job_posting_url,
+        'user_prompt_provided': user_prompt is not None, # 실제 프롬프트 내용 대신 제공 여부만 저장
+        'status_history': [{'step': 'Pipeline Initiated', 'timestamp': datetime.datetime.now().isoformat()}], # datetime.datetime.now()로 수정
+        'chain_log_id': chain_log_id, # chain_log_id도 메타에 추가
+    }
+    _update_root_task_state(chain_log_id, "파이프라인 초기화 및 검증 중", states.STARTED, details=initial_meta)
 
     try:
-        chain_async_result = processing_chain_final.apply_async(task_id=root_task_id)
-        logger.info(f"{log_prefix} Dispatched chain. Last task ID in chain: {chain_async_result.id}. Polling root ID: {root_task_id}")
-        # chain_async_result.id는 체인의 마지막 작업 ID임.
-        # root_task_id (self.request.id)는 이 파이프라인 요청 자체의 ID.
-        logger.debug(f"{log_prefix} Chain dispatched. AsyncResult ID: {chain_async_result.id}, Parent ID: {chain_async_result.parent.id if chain_async_result.parent else 'None'}. Root Task ID for this pipeline run: {root_task_id}")
-        logger.debug(f"{log_prefix} Returning root_task_id: {root_task_id} from process_job_posting_pipeline.")
-        return root_task_id # 파이프라인의 루트 ID 반환
+        logger.info(f"{log_prefix} Building Celery chain.")
+        # user_prompt_text가 step_4로 전달될 수 있도록 partial을 사용
+        # process_job_posting_pipeline의 user_prompt가 실제 텍스트 내용이라고 가정.
+        # 만약 bool이었다면, 실제 프롬프트 텍스트를 다른 곳에서 가져와야 함. 현재는 문자열로 가정.
 
-    except Exception as e_chain_dispatch:
-        logger.error(f"{log_prefix} Failed to dispatch chain: {e_chain_dispatch}", exc_info=True)
-        err_details = {'error': str(e_chain_dispatch), 'type': type(e_chain_dispatch).__name__, 'traceback': traceback.format_exc()}
-        _update_root_task_state(root_task_id, "파이프라인 실행 실패 (요청단계)", status=states.FAILURE, error_info=err_details)
-        raise # FastAPI가 500 에러 반환하도록 함
+        # Create a partial for step_4_generate_cover_letter with user_prompt_text
+        step_4_partial = step_4_generate_cover_letter.s(user_prompt_text=user_prompt, chain_log_id=chain_log_id)
 
-# Utility function to get chain_log_id - 더 이상 사용되지 않으므로 삭제
-# def get_chain_log_id(request_context):
-#     if request_context.parent_id:
-#         return request_context.root_id or request_context.parent_id or request_context.id
-#     return request_context.id
+        task_chain = chain(
+            step_1_extract_html.s(url=job_posting_url, chain_log_id=chain_log_id),
+            step_2_extract_text.s(chain_log_id=chain_log_id),
+            step_3_filter_content.s(chain_log_id=chain_log_id),
+            step_4_partial  # Pass the partial here
+        )
+        
+        logger.info(f"{log_prefix} Celery chain built. Applying async...")
+        chain_async_result = task_chain.apply_async(task_id=chain_log_id) # 루트 태스크 ID를 체인 전체에 사용
+        
+        logger.info(f"{log_prefix} Celery chain apply_async called. Root task ID: {chain_async_result.id} (should be same as {chain_log_id}).")
+        _update_root_task_state(chain_log_id, "HTML 추출 작업 시작됨", details={'pipeline_status': 'Step 1 Initiated'})
 
-# 이 파일의 맨 끝이나 다른 유틸리티 모듈로 이동 가능
+        # process_job_posting_pipeline은 더 이상 명시적으로 결과를 반환하지 않음 (None)
+        # 상태 업데이트는 _update_root_task_state를 통해 이루어짐
+        return None # 명시적으로 None 반환
+
+    except Exception as e_pipeline:
+        error_message = f"Pipeline construction or initial execution error for URL {job_posting_url}: {str(e_pipeline)}"
+        logger.error(f"{log_prefix} {error_message}", exc_info=True)
+        detailed_error = get_detailed_error_info(e_pipeline)
+        _update_root_task_state(
+            chain_log_id, 
+            "파이프라인 시작 중 심각한 오류 발생", 
+            status=states.FAILURE, 
+            details={'original_url': job_posting_url, 'error': error_message},
+            error_info=detailed_error
+        )
+        # 실패 시에도 명시적으로 None 반환 (또는 에러를 다시 raise하여 Celery가 처리하도록 할 수도 있음)
+        # 현재는 _update_root_task_state를 통해 상태를 FAILURE로 설정하고 None을 반환
+        return None
+
 def get_detailed_error_info(exception_obj: Exception) -> Dict[str, str]:
+    """예외 객체로부터 상세 정보를 추출합니다."""
     return {
-        'type': type(exception_obj).__name__,
-        'message': str(exception_obj),
-        'traceback': traceback.format_exc()
+        "error_type": type(exception_obj).__name__,
+        "error_message": str(exception_obj),
+        "traceback": traceback.format_exc()
     }

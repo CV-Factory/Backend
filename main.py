@@ -103,8 +103,10 @@ async def start_processing_task(request: ProcessRequest):
         log_message_prefix += f", Prompt='{request.prompt}'"
     logger.info(log_message_prefix)
     try:
-        task = process_job_posting_pipeline.delay(url=request.job_url, user_prompt=request.prompt)
-        logger.info(f"Celery 작업 파이프라인 시작됨. Root Task ID: {task.id}")
+        # Celery 작업 시작
+        logger.info(f"Celery 작업 process_job_posting_pipeline 호출 시도. URL: {request.job_url}, Prompt: {request.prompt is not None}")
+        task = process_job_posting_pipeline.delay(job_posting_url=request.job_url, user_prompt=request.prompt)
+        logger.info(f"Celery 작업 시작됨. Task ID: {task.id}")
         return TaskStatusResponse(task_id=task.id, status="PENDING", current_step="Pipeline Initiated")
     except Exception as e:
         logger.error(f"Celery 작업 파이프라인 시작 중 오류 발생: {e}", exc_info=True)
