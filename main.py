@@ -49,6 +49,9 @@ class TaskStatusResponse(BaseModel):
     result: Any | None = None
     current_step: str | None = None
 
+class LogDisplayedCvRequest(BaseModel):
+    displayed_text: str
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("FastAPI 애플리케이션 시작")
@@ -95,6 +98,21 @@ async def start_extract_text_task(file_name: str = Query(..., description=".html
     except Exception as e:
         logger.error(f"HTML에서 텍스트 추출 작업 시작 중 오류 발생: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error starting text extraction from HTML task: {str(e)}")
+
+@app.post("/log-displayed-cv", status_code=status.HTTP_200_OK)
+async def log_displayed_cv_from_frontend(request: LogDisplayedCvRequest):
+    """
+    프론트엔드의 generated_resume textarea에 표시된 내용을 받아 로깅합니다.
+    """
+    try:
+        logger.info(f"프론트엔드에서 수신된 자기소개서 내용 (검증용):\n--- START ---\n{request.displayed_text}\n--- END ---")
+        return {"message": "Displayed CV content logged successfully."}
+    except Exception as e:
+        logger.error(f"프론트엔드 자기소개서 내용 로깅 중 오류: {e}", exc_info=True)
+        # 이 경우는 클라이언트에게 심각한 오류를 알릴 필요는 없을 수 있으므로,
+        # 500 대신 로깅 성공 여부와 관계없이 200을 반환하거나, 별도의 상태 코드를 사용할 수 있습니다.
+        # 여기서는 간단히 500을 발생시키겠습니다.
+        raise HTTPException(status_code=500, detail=f"Error logging displayed CV content: {str(e)}")
 
 @app.post("/", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
 async def start_processing_task(request: ProcessRequest):
