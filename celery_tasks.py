@@ -19,6 +19,8 @@ from typing import Optional, Dict, Any, Union
 from celery import chain, signature, states
 import traceback
 from playwright.sync_api import Error as PlaywrightError
+from celery.result import AsyncResult # 추가된 라인
+from celery import Task, signals
 
 # 전역 로깅 레벨 및 라이브러리 로깅 레벨 조정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -91,69 +93,44 @@ def sanitize_filename(url_or_name: str, extension: str = "", ensure_unique: bool
         logger.warning(f"Returning error-fallback filename: {error_name}")
         return error_name
 
-def _update_root_task_state(task_id: str, current_step_message: str, status: str = states.STARTED, details: Optional[Dict[str, Any]] = None, error_info: Optional[Dict[str, Any]] = None):
-    """루트 작업의 상태를 업데이트하는 헬퍼 함수."""
+def _update_root_task_state(root_task_id: str, state: str, meta: dict = None, exc: Exception = None, traceback_str: str = None):
+    logger.debug(f"[StateUpdateDebug] Root task {root_task_id} - Attempting to update state to '{state}' with meta: {meta}")
     try:
-        meta_for_update = {'current_step': current_step_message}
-        if details:
-            meta_for_update.update(details)
+        if not root_task_id:
+            logger.warning("[StateUpdateWarning] root_task_id is None or empty, cannot update state.")
+            return
 
-        result_for_store = None
-        traceback_for_store = None
-        current_status_for_store = status
+        task_result = AsyncResult(root_task_id, app=celery_app)
 
-        if current_status_for_store == states.FAILURE:
-            logger.debug(f"[StateUpdateFailureDetails] Preparing FAILURE state for {task_id}. Original error_info: {error_info}")
-            if error_info:
-                # error_info에 'error', 'type', 'traceback' 등이 있다고 가정
-                err_msg = str(error_info.get('error', 'Unknown error'))
-                err_type_name = str(error_info.get('type', 'Exception'))
-                
-                # result_for_store는 예외 객체여야 합니다.
-                # 간단한 Exception 객체를 생성하거나, error_info의 내용을 사용해 더 구체적인 예외 객체를 만들 수 있습니다.
-                # 여기서는 간단히 Exception 객체를 사용합니다.
-                result_for_store = Exception(f"{err_type_name}: {err_msg}")
-                
-                traceback_for_store = error_info.get('traceback') # 문자열 형태의 traceback
-                
-                # meta에는 순수 정보성 데이터만 남기는 것을 고려. 
-                # error_details는 이미 result와 traceback으로 분리됨.
-                # 필요하다면, error_info의 다른 내용을 meta_for_update['error_details']에 유지할 수 있음.
-                # 여기서는 meta_for_update에 error_info의 내용을 'error_details'로 유지합니다.
-                meta_for_update['error_details'] = error_info 
-            else:
-                result_for_store = Exception("Unknown error occurred, no error_info provided.")
-            logger.info(f"[StateUpdateFailure] Root task {task_id} being set to FAILURE. Message: {current_step_message}. Result: {result_for_store}, Traceback: {'Provided' if traceback_for_store else 'Not provided'}")
-        
-        elif current_status_for_store not in [states.SUCCESS, states.RETRY, states.REVOKED, states.STARTED]:
-            logger.warning(f"Invalid or custom status '{current_status_for_store}' provided for task {task_id}. Defaulting to STARTED. Message: {current_step_message}")
-            current_status_for_store = states.STARTED
-            if error_info: # 비표준 상태지만 error_info가 있다면 로깅/meta에 포함
-                 meta_for_update['error_details'] = error_info
+        # 실패 상태 처리
+        if state == 'FAILURE':
+            logger.error(f"[StateUpdateFailure] Root task {root_task_id} is being marked as FAILURE. Meta: {meta}, Exc: {exc}")
+            # 실패 시에는 backend.mark_as_failure를 직접 사용하여 예외 정보와 트레이스백을 명시적으로 전달
+            celery_app.backend.mark_as_failure(
+                root_task_id,
+                exc=exc if exc else ValueError(meta.get('error', 'Unknown error leading to FAILURE state')),
+                traceback=traceback_str,
+                request=None, # Celery 5.x에서는 request 객체가 필수는 아님
+                store_result=True
+            )
+            # 추가로 info 필드에도 메타데이터 업데이트 (선택적)
+            if meta:
+                current_meta = task_result.info or {}
+                current_meta.update(meta)
+                task_result.update_state(state='FAILURE', meta=current_meta)
+            return
 
+        # 성공 또는 진행 중 상태 처리
+        # AsyncResult.update_state()는 meta를 자동으로 info 필드에 저장합니다.
+        logger.debug(f"[StateUpdateMeta] Root task {root_task_id} - meta_for_update before storing: {meta}")
+        task_result.update_state(state=state, meta=meta)
+        logger.info(f"[StateUpdateSuccess] Root task {root_task_id} state successfully updated to '{state}'. Current meta: {task_result.info}")
 
-        logger.info(f"[StateUpdateMeta] Root task {task_id} - meta_for_update before storing: {meta_for_update}")
-        
-        # store_result 호출
-        celery_app.backend.store_result(
-            task_id, 
-            result_for_store,  # 성공 시 None, 실패 시 Exception 객체
-            current_status_for_store, 
-            traceback=traceback_for_store, # 실패 시 traceback 문자열
-            meta=meta_for_update # 순수 정보성 메타데이터
-        )
-        
-        log_details_str = f"details: {meta_for_update.get('details', 'N/A')}"
-        log_error_str = ""
-        if current_status_for_store == states.FAILURE:
-            log_error_str = f", error_result: {result_for_store}, tb_provided: {'Yes' if traceback_for_store else 'No'}"
-        elif error_info: # FAILURE가 아닌데 error_info가 있는 경우 (예: 경고 후 진행)
-            log_error_str = f", error_details_in_meta: {meta_for_update.get('error_details', 'N/A')}"
-
-        logger.info(f"[StateUpdate] Root task {task_id} status: {current_status_for_store}, step: '{current_step_message}', {log_details_str}{log_error_str}")
-
-    except Exception as e_update:
-        logger.error(f"[StateUpdateFailureCritical] Critically failed to update root task {task_id} state: {e_update}", exc_info=True)
+    except Exception as e:
+        # 이 로깅은 루트 태스크 상태 업데이트 자체가 실패했을 때만 실행됩니다.
+        # 일반적인 태스크 실패는 위에서 'FAILURE' 상태로 처리됩니다.
+        logger.critical(f"[StateUpdateFailureCritical] Critically failed to update root task {root_task_id} state: {e}", exc_info=True)
+        # 상태 업데이트 실패 시, 추가적인 복구 로직이나 알림을 고려할 수 있습니다.
 
 def _get_playwright_page_content_with_iframes_processed(page, original_url: str, chain_log_id: str, step_log_id: str) -> str:
     """Playwright 페이지에서 iframe을 처리하고 전체 HTML 컨텐츠를 반환합니다."""
@@ -459,7 +436,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
     logger.debug(f"{log_prefix} Input URL: {url}, Chain Log ID: {chain_log_id}")
 
     # 루트 작업 상태 업데이트 (시작)
-    _update_root_task_state(chain_log_id, f"(1_extract_html) HTML 추출 시작: {url}", details={'current_task_id': str(task_id), 'url_for_step1': url})
+    _update_root_task_state(chain_log_id, f"(1_extract_html) HTML 추출 시작: {url}", meta={'current_task_id': str(task_id), 'url_for_step1': url})
 
     html_file_path = ""
     try:
@@ -475,7 +452,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
                 logger.debug(f"{log_prefix} Browser object: {browser}")
             except Exception as e_browser:
                 logger.error(f"{log_prefix} Error launching browser: {e_browser}", exc_info=True)
-                _update_root_task_state(chain_log_id, "(1_extract_html) 브라우저 실행 실패", status=states.FAILURE, error_info={'error': str(e_browser), 'traceback': traceback.format_exc()})
+                _update_root_task_state(chain_log_id, "(1_extract_html) 브라우저 실행 실패", state=states.FAILURE, exc=e_browser, traceback_str=traceback.format_exc(), meta={'error_message': str(e_browser), 'url': url})
                 self.update_state(state=states.FAILURE, meta={'error': str(e_browser)})
                 raise Reject(f"Browser launch failed: {e_browser}", requeue=False)
 
@@ -507,14 +484,14 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
             except PlaywrightError as e_playwright: # Playwright 관련 주요 예외
                 error_message = f"Playwright operation failed: {e_playwright}"
                 logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
-                _update_root_task_state(chain_log_id, "(1_extract_html) Playwright 작업 실패", status=states.FAILURE, error_info={'error': str(e_playwright), 'traceback': traceback.format_exc(), 'url': url})
+                _update_root_task_state(chain_log_id, "(1_extract_html) Playwright 작업 실패", state=states.FAILURE, exc=e_playwright, traceback_str=traceback.format_exc(), meta={'error_message': error_message, 'url': url})
                 # self.update_state(state=states.FAILURE, meta={'error': str(e_playwright), 'url': url}) # 개별 작업 상태도 업데이트
                 # 실패 시 재시도 로직은 Celery의 max_retries에 의해 이미 처리됨. 여기서는 Reject로 명시적 실패 처리.
                 raise Reject(error_message, requeue=False) # 재시도하지 않고 실패 처리
             except Exception as e_general:
                 error_message = f"An unexpected error occurred during HTML extraction: {e_general}"
                 logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
-                _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 중 예기치 않은 오류", status=states.FAILURE, error_info={'error': str(e_general), 'traceback': traceback.format_exc(), 'url': url})
+                _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 중 예기치 않은 오류", state=states.FAILURE, exc=e_general, traceback_str=traceback.format_exc(), meta={'error_message': error_message, 'url': url})
                 # self.update_state(state=states.FAILURE, meta={'error': str(e_general), 'url': url})
                 raise Reject(error_message, requeue=False)
             finally:
@@ -551,20 +528,20 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
             page_content_len = len(result_data_for_log['page_content']) if result_data_for_log['page_content'] is not None else 0
             result_data_for_log['page_content'] = f"<page_content_omitted_from_log, length={page_content_len}>"
 
-        _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 및 저장 완료", details={'html_file_path': html_file_path})
+        _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 및 저장 완료", meta={'html_file_path': html_file_path})
         logger.info(f"{log_prefix} ---------- Task finished successfully. Result for log: {result_data_for_log} ----------") # 수정된 로깅
         logger.debug(f"{log_prefix} Returning from step_1: keys={list(result_data.keys())}, page_content length: {len(result_data.get('page_content', '')) if result_data.get('page_content') else 0}")
         return result_data
 
     except Reject as e_reject: # 명시적으로 Reject된 경우, Celery가 재시도 또는 실패 처리
         logger.warning(f"{log_prefix} Task explicitly rejected: {e_reject.reason}. Celery will handle retry/failure.")
-        _update_root_task_state(chain_log_id, f"(1_extract_html) 작업 명시적 거부: {e_reject.reason}", status=states.FAILURE, error_info={'error': str(e_reject.reason), 'reason_for_reject': getattr(e_reject, 'message', str(e_reject))}) # 상세 정보 추가
+        _update_root_task_state(chain_log_id, f"(1_extract_html) 작업 명시적 거부: {e_reject.reason}", state=states.FAILURE, exc=e_reject, traceback_str=getattr(e_reject, 'traceback', None), meta={'error_message': str(e_reject.reason), 'reason_for_reject': getattr(e_reject, 'message', str(e_reject))}) # 상세 정보 추가
         raise # Celery가 처리하도록 re-raise
 
     except MaxRetriesExceededError as e_max_retries:
         error_message = "Max retries exceeded for HTML extraction."
         logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True) # exc_info=True 추가
-        _update_root_task_state(chain_log_id, "(1_extract_html) 최대 재시도 초과", status=states.FAILURE, error_info={'error': error_message, 'original_exception': str(e_max_retries), 'traceback': traceback.format_exc()})
+        _update_root_task_state(chain_log_id, "(1_extract_html) 최대 재시도 초과", state=states.FAILURE, exc=e_max_retries, traceback_str=traceback.format_exc(), meta={'error_message': error_message, 'original_exception': str(e_max_retries)})
         # self.update_state(state=states.FAILURE, meta={'error': error_message, 'original_exception': str(e_max_retries)})
         # MaxRetriesExceededError는 Celery에 의해 자동으로 전파되므로, 여기서 다시 raise할 필요는 없을 수 있으나,
         # 명시적으로 체인을 중단시키고 싶다면 raise하는 것이 안전합니다.
@@ -578,7 +555,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
         # 그럼에도 불구하고 여기까지 온 예외는 매우 예기치 않은 상황일 수 있습니다.
         error_message = f"Outer catch-all error in step_1_extract_html: {e_outer}"
         logger.critical(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
-        _update_root_task_state(chain_log_id, "(1_extract_html) 처리되지 않은 심각한 오류", status=states.FAILURE, error_info={'error': str(e_outer), 'traceback': traceback.format_exc()})
+        _update_root_task_state(chain_log_id, "(1_extract_html) 처리되지 않은 심각한 오류", state=states.FAILURE, exc=e_outer, traceback_str=traceback.format_exc(), meta={'error_message': error_message})
         # self.update_state(state=states.FAILURE, meta={'error': error_message})
         # 심각한 오류이므로, 재시도하지 않고 즉시 실패 처리하기 위해 Reject 사용 가능
         raise Reject(f"Critical unhandled error: {e_outer}", requeue=False)
@@ -596,7 +573,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
     if not isinstance(prev_result, dict) or 'page_content' not in prev_result or 'html_file_path' not in prev_result or 'original_url' not in prev_result:
         error_msg = f"Invalid or incomplete prev_result: {prev_result}. Expected a dict with 'page_content', 'html_file_path', and 'original_url'."
         logger.error(f"{log_prefix} {error_msg}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 오류: 이전 단계 결과 형식 오류", status=states.FAILURE, error_info={'error': error_msg}) # error -> error_info, status 추가
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 오류: 이전 단계 결과 형식 오류", state=states.FAILURE, meta={'error': error_msg})
         raise ValueError(error_msg)
 
     html_content = prev_result.get('page_content')
@@ -613,7 +590,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
     if not html_content:
         error_msg = f"Page content is missing from previous step result: {prev_result.keys()}"
         logger.error(f"{log_prefix} {error_msg}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 이전 단계 HTML 내용 없음", status=states.FAILURE, error_info={'error': error_msg})
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 이전 단계 HTML 내용 없음", state=states.FAILURE, meta={'error': error_msg})
         raise ValueError(error_msg)
 
     # 다음 로직을 위한 extracted_text_file_path 초기화
@@ -630,7 +607,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
             base_html_fn_for_saving = re.sub(r'_raw_html_[a-f0-9]{8}_[a-f0-9]{8}$', '', base_html_fn_for_saving) # 고유 ID 패턴 수정
 
         logger.info(f"{log_prefix} Starting text extraction from page_content (length: {len(html_content)})")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 내용에서 텍스트 추출 시작", details={'current_task_id': task_id})
+        _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 내용에서 텍스트 추출 시작", meta={'current_task_id': task_id})
 
         # extracted_text_file_path = None # 초기화 (위로 이동)
         # html_content = page_content # 이미 html_content 변수에 할당되어 있음
@@ -747,7 +724,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         with open(extracted_text_file_path, "w", encoding="utf-8") as f:
             f.write(text)
         logger.info(f"{log_prefix} Text extracted and saved to: {extracted_text_file_path} (Final Length: {len(text)})")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 파일 저장 완료", details={'text_file_path': extracted_text_file_path})
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 파일 저장 완료", meta={'text_file_path': extracted_text_file_path})
         
         result_to_return = {"text_file_path": extracted_text_file_path, 
                              "original_url": original_url, 
@@ -760,8 +737,8 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
 
     except FileNotFoundError as e_fnf:
         logger.error(f"{log_prefix} FileNotFoundError during text extraction: {e_fnf}. HTML file path: {html_file_path}", exc_info=True)
-        err_details_fnf = {'error': str(e_fnf), 'type': type(e_fnf).__name__, 'html_file': str(html_file_path), 'traceback': traceback.format_exc()}
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 추출 실패 (파일 없음)", status=states.FAILURE, error_info=err_details_fnf)
+        err_details_fnf = {'error': str(e_fnf), 'type': type(e_fnf).__name__, 'html_file': str(html_file_path)}
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 추출 실패 (파일 없음)", state=states.FAILURE, exc=e_fnf, traceback_str=traceback.format_exc(), meta=err_details_fnf)
         raise # Celery가 태스크를 실패로 처리하도록 함
     except IOError as e_io:
         logger.error(f"{log_prefix} IOError during text extraction: {e_io}. HTML file path: {html_file_path}", exc_info=True)
@@ -1067,96 +1044,168 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         logger.info(f"{log_prefix} ---------- Task execution attempt ended. ----------")
 
 
-@celery_app.task(bind=True, name='celery_tasks.process_job_posting_pipeline', max_retries=0)
-def process_job_posting_pipeline(self, job_posting_url: str, user_prompt: Optional[str] = None) -> Dict[str, Any]: # 반환 타입을 명시적으로 Dict로 변경
-    """전체 채용 공고 처리 파이프라인을 정의하고 실행합니다."""
-    # 이 태스크 자체가 루트 태스크가 되므로, self.request.id가 루트 태스크 ID.
-    root_task_id = self.request.id
-    log_prefix = f"[PipelineTask {root_task_id}]"
-    logger.info(f"{log_prefix} Pipeline initiated for URL: {job_posting_url}. User prompt: {'Provided' if user_prompt else 'Not provided'}")
+# @celery_app.task(bind=True, name='celery_tasks.process_job_posting_pipeline', max_retries=0) # Celery 태스크 데코레이터 제거
+def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str] = None, root_task_id: Optional[str] = None) -> str: # 반환 타입을 AsyncResult의 ID(str)로 변경, root_task_id 인자 추가
+    """전체 채용 공고 처리 파이프라인을 정의하고 비동기적으로 실행합니다. 루트 태스크 ID를 반환합니다."""
+    
+    # root_task_id가 제공되지 않으면 새로 생성 (일반적으로 main.py에서 생성해서 전달)
+    if not root_task_id:
+        root_task_id = str(uuid.uuid4())
+        logger.warning(f"[PipelineFunction] root_task_id not provided, generated new one: {root_task_id}")
 
-    # 초기 상태 업데이트: 파이프라인 시작
-    self.update_state(state='STARTED', meta={'current_step': '파이프라인 시작됨', 'job_posting_url': job_posting_url, 'root_task_id': root_task_id})
+    log_prefix = f"[PipelineFunction {root_task_id}]" # self.request.id 대신 root_task_id 사용
+    logger.info(f"{log_prefix} Pipeline function initiated for URL: {job_posting_url}. User prompt: {'Provided' if user_prompt else 'Not provided'}")
+
+    # 초기 상태 업데이트: 파이프라인 시작 (AsyncResult를 직접 사용하여 상태 설정)
+    # 이 함수는 더 이상 Celery task가 아니므로 self.update_state 사용 불가.
+    # AsyncResult를 사용하여 초기 상태를 'PENDING' 또는 'STARTED'로 설정하고 meta를 저장할 수 있습니다.
+    # Celery 앱 인스턴스를 통해 backend에 직접 접근하여 상태를 설정할 수도 있으나,
+    # 일반적으로 작업이 제출되면 Celery에 의해 PENDING 상태가 됩니다.
+    # 여기서는 _update_root_task_state를 사용하여 명시적으로 'STARTED' 상태와 메타데이터를 설정합니다.
+    initial_meta = {'job_posting_url': job_posting_url, 'root_task_id': root_task_id, 'status_message': '파이프라인 시작됨'}
+    _update_root_task_state(root_task_id, state='STARTED', meta=initial_meta)
+
+
+    # 성공 콜백 정의
+    # 성공 시에는 step_4의 결과(final_result_from_chain)가 이 콜백의 인자로 전달됩니다.
+    on_pipeline_success_signature = signature(
+        'celery_tasks.handle_pipeline_completion',
+        args=(root_task_id, True), # is_success = True
+        immutable=True # 콜백의 결과는 중요하지 않으므로 immutable로 설정 가능
+    )
+
+    # 실패 콜백 정의
+    # 실패 시에는 예외 정보 등이 이 콜백의 인자로 전달될 수 있습니다.
+    # (주의: link_error는 task_id만 받고, 예외 정보는 해당 task_id의 결과에서 조회해야 할 수 있음)
+    # 여기서는 간단히 실패했다는 사실만 전달하고, 상세 정보는 root_task_id를 통해 조회하도록 가정합니다.
+    on_pipeline_failure_signature = signature(
+        'celery_tasks.handle_pipeline_completion',
+        args=(root_task_id, False), # is_success = False
+        immutable=True
+    )
 
     try:
         # 파이프라인 정의
-        pipeline = chain(
+        pipeline_chain = chain(
             step_1_extract_html.s(url=job_posting_url, chain_log_id=root_task_id),
             step_2_extract_text.s(chain_log_id=root_task_id),
             step_3_filter_content.s(chain_log_id=root_task_id),
             step_4_generate_cover_letter.s(chain_log_id=root_task_id, user_prompt_text=user_prompt)
         )
         
-        logger.info(f"{log_prefix} Celery chain created. Executing pipeline and waiting for result.")
-        # 체인을 비동기적으로 시작하고, 그 결과를 동기적으로 기다립니다.
-        # .get()은 체인이 완료될 때까지 현재 태스크(process_job_posting_pipeline)를 블로킹합니다.
-        # propagate=True는 체인 내에서 예외 발생 시 .get()이 해당 예외를 다시 발생시키도록 합니다.
-        async_result_of_chain = pipeline.apply_async()
+        logger.info(f"{log_prefix} Celery chain created. Applying async with callbacks.")
         
-        # 여기서 get() 호출 시 타임아웃을 설정할 수도 있습니다. e.g., async_result_of_chain.get(timeout=300) # 5분
-        # 타임아웃 없이 기다리면 체인이 완료될 때까지 블록됩니다.
-        logger.info(f"{log_prefix} Waiting for chain (first task ID: {async_result_of_chain.id}) to complete...")
-        final_result_from_chain = async_result_of_chain.get(propagate=True) # 예외 발생 시 전파
+        # 체인을 비동기적으로 시작하고, link 또는 link_error로 콜백 연결
+        # apply_async는 AsyncResult 객체를 반환하며, 이 객체의 id가 체인의 첫 번째 태스크 ID가 됩니다.
+        # 하지만 전체 체인의 완료를 추적하기 위해 root_task_id를 사용합니다.
+        # on_success 콜백은 체인의 *마지막* 태스크가 성공했을 때 호출됩니다.
+        # on_failure 콜백(link_error)은 체인 내의 *어떤* 태스크든 실패했을 때 호출됩니다.
+        async_result_of_chain = pipeline_chain.apply_async(
+            link=on_pipeline_success_signature,
+            link_error=on_pipeline_failure_signature
+        )
         
-        logger.info(f"{log_prefix} Pipeline execution finished. Final result from chain received.")
-        # logger.debug(f"{log_prefix} Final result details (for log): { {k: (v[:100] + '...' if isinstance(v, str) and len(v) > 100 else v) for k, v in final_result_from_chain.items()} }")
+        # 체인이 시작되었음을 로그로 남기고, 생성된 루트 태스크 ID를 반환합니다.
+        # 이 ID를 사용하여 클라이언트(main.py)가 상태를 폴링하거나 SSE로 스트리밍합니다.
+        logger.info(f"{log_prefix} Pipeline chain successfully submitted. First task ID in chain: {async_result_of_chain.id}. Root task ID for tracking: {root_task_id}")
+        
+        # _update_root_task_state(root_task_id, state='PROGRESS', meta={'status_message': '파이프라인 처리 중', 'first_task_id': async_result_of_chain.id})
+        # -> STARTED 상태에서 첫 번째 태스크가 실행되면서 _update_root_task_state가 호출될 것이므로 중복 업데이트 방지
 
-        if isinstance(final_result_from_chain, dict) and final_result_from_chain.get('status') == 'SUCCESS':
-            logger.info(f"{log_prefix} Chain completed successfully. Updating pipeline task state to SUCCESS.")
-            # 파이프라인 태스크의 최종 상태와 결과를 meta에 저장
-            self.update_state(state=states.SUCCESS, meta=final_result_from_chain)
-            return final_result_from_chain # 이 결과가 process_job_posting_pipeline 태스크의 result가 됨
-        else:
-            # 체인이 성공적으로 완료되었으나, 반환된 결과가 예상한 형식이 아닐 경우
-            # 또는 step_4에서 'status': 'SUCCESS'를 포함하지 않은 경우
-            error_message = "Pipeline chain completed, but the final result format was unexpected or indicated an issue."
-            logger.error(f"{log_prefix} {error_message} Result: {final_result_from_chain}")
-            # 최종 결과가 있더라도, 문제가 있다고 판단되면 FAILURE로 처리
-            failure_meta = {
-                'current_step': '파이프라인 완료 (결과 형식 오류)',
-                'error': error_message,
-                'details': str(final_result_from_chain), # 전체 결과 문자열로 저장
-                'root_task_id': root_task_id,
-                'job_posting_url': job_posting_url,
-            }
-            if isinstance(final_result_from_chain, dict): # 원래 결과의 일부를 유지할 수 있다면
-                 failure_meta.update(final_result_from_chain) # 기존 정보에 에러 메시지 추가
+        return root_task_id # FastAPI가 이 ID를 클라이언트에게 반환하고, SSE 스트리밍에 사용
 
-            self.update_state(state=states.FAILURE, meta=failure_meta)
-            return failure_meta # 실패 시에도 이 메타 정보를 반환 (result 필드에 저장됨)
-
-    except Reject as e_reject: # 하위 태스크에서 Reject로 명시적으로 실패 처리한 경우
-        error_message = f"Pipeline execution rejected by a sub-task: {e_reject.reason}"
-        detailed_error_info = {'reason': e_reject.reason, 'requeue': e_reject.requeue}
-        logger.error(f"{log_prefix} {error_message}", exc_info=False) # exc_info=False로 스택 트레이스 중복 방지
+    except Exception as e_pipeline_setup:
+        error_message = f"Failed to set up or submit the Celery pipeline: {e_pipeline_setup}"
+        detailed_error_info = get_detailed_error_info(e_pipeline_setup)
+        logger.error(f"{log_prefix} {error_message}", exc_info=True)
         
         failure_meta = {
-            'current_step': '파이프라인 중단 (하위 작업 거부)',
+            'status_message': '파이프라인 설정 또는 제출 실패',
             'error': error_message,
+            'type': str(type(e_pipeline_setup).__name__),
             'details': detailed_error_info,
             'root_task_id': root_task_id,
             'job_posting_url': job_posting_url,
         }
-        self.update_state(state=states.FAILURE, meta=failure_meta)
-        return failure_meta
+        _update_root_task_state(root_task_id, state=states.FAILURE, meta=failure_meta, exc=e_pipeline_setup, traceback_str=traceback.format_exc())
+        # 이 경우, 함수는 root_task_id를 반환하지만, 해당 ID의 상태는 FAILURE로 설정됩니다.
+        # SSE 스트림은 이 실패 상태를 즉시 전송할 수 있습니다.
+        return root_task_id 
 
-    except Exception as e_pipeline:
-        error_message = f"An unexpected error occurred in the pipeline execution: {e_pipeline}"
-        detailed_error_info = get_detailed_error_info(e_pipeline)
-        logger.error(f"{log_prefix} {error_message}", exc_info=True)
+
+@celery_app.task(name='celery_tasks.handle_pipeline_completion')
+def handle_pipeline_completion(result_or_request_obj, root_task_id: str, is_success: bool):
+    """
+    파이프라인 체인의 성공 또는 실패를 처리하는 콜백 태스크입니다.
+    성공 시: result_or_request_obj는 이전 태스크(step_4)의 결과입니다.
+    실패 시: result_or_request_obj는 실패한 태스크의 request 객체일 수 있습니다 (Celery 버전에 따라 다름).
+               또는 link_error로 호출된 경우, 실패한 task_id가 암묵적으로 컨텍스트에 있을 수 있습니다.
+               여기서는 is_success 플래그를 사용하여 성공/실패를 명확히 구분합니다.
+    """
+    log_prefix = f"[PipelineCallback {root_task_id}]"
+    logger.info(f"{log_prefix} Completion handler called. Is Success: {is_success}")
+
+    if is_success:
+        # result_or_request_obj는 step_4_generate_cover_letter의 반환 값입니다.
+        final_result_from_chain = result_or_request_obj 
+        logger.info(f"{log_prefix} Pipeline completed successfully. Final result from chain received.")
+        # logger.debug(f"{log_prefix} Final result details: {final_result_from_chain}")
+
+        if isinstance(final_result_from_chain, dict) and final_result_from_chain.get('status') == 'SUCCESS':
+            # 최종 상태를 SUCCESS로 업데이트하고, step_4의 결과를 meta에 저장
+            _update_root_task_state(root_task_id, state=states.SUCCESS, meta=final_result_from_chain)
+            logger.info(f"{log_prefix} Root task {root_task_id} marked as SUCCESS with final results.")
+        else:
+            error_message = "Pipeline chain reported success, but the final result format was unexpected or indicated an internal issue in step 4."
+            logger.error(f"{log_prefix} {error_message} Result: {final_result_from_chain}")
+            failure_meta = {
+                'status_message': '파이프라인 완료 (최종 결과 형식 오류)',
+                'error': error_message,
+                'details': str(final_result_from_chain),
+                'root_task_id': root_task_id,
+            }
+            if isinstance(final_result_from_chain, dict):
+                 failure_meta.update(final_result_from_chain)
+            _update_root_task_state(root_task_id, state=states.FAILURE, meta=failure_meta, exc=ValueError(error_message))
+            logger.error(f"{log_prefix} Root task {root_task_id} marked as FAILURE due to unexpected final result format.")
+    else:
+        # 파이프라인 내의 어떤 태스크에서 오류 발생
+        # link_error는 실패한 태스크의 ID나 request 객체를 직접 전달하지 않을 수 있습니다.
+        # 대신, root_task_id를 사용하여 AsyncResult로 상태를 조회하고,
+        # 이미 각 단계의 실패 처리 로직에서 _update_root_task_state가 호출되었을 가능성이 높습니다.
+        # 이 콜백은 실패가 발생했음을 확인하고, 필요한 경우 추가적인 정리나 알림을 수행할 수 있습니다.
+        # 여기서는 이미 개별 태스크에서 _update_root_task_state를 통해 FAILURE로 마킹했을 것이므로,
+        # 중복 업데이트를 피하거나, 최종 실패 확인 메시지만 로깅할 수 있습니다.
         
-        failure_meta = {
-            'current_step': '파이프라인 실행 중 예외 발생',
-            'error': error_message,
-            'type': str(type(e_pipeline).__name__),
-            'details': detailed_error_info, # traceback 포함될 수 있음
-            'root_task_id': root_task_id,
-            'job_posting_url': job_posting_url,
-        }
-        self.update_state(state=states.FAILURE, meta=failure_meta)
-        return failure_meta # 실패 시에도 이 메타 정보를 반환 (result 필드에 저장됨)
-    finally:
-        logger.info(f"{log_prefix} Pipeline task execution attempt concluded.")
+        # 현재 AsyncResult를 통해 root_task_id의 상태를 확인
+        task_result = AsyncResult(root_task_id, app=celery_app)
+        current_meta = task_result.info or {}
+        current_status = task_result.status
+        
+        logger.error(f"{log_prefix} Pipeline execution failed. Root task ID: {root_task_id}. Current status from backend: {current_status}. Current meta: {current_meta.get('error', 'No specific error in meta yet')}")
+
+        # 만약 _update_root_task_state가 어떤 이유로든 호출되지 않았다면, 여기서 일반적인 실패로 마킹
+        if current_status != states.FAILURE:
+            logger.warning(f"{log_prefix} Root task {root_task_id} was not already in FAILURE state. Marking it now.")
+            failure_meta = {
+                'status_message': '파이프라인 실행 중 알 수 없는 오류 발생 (콜백에서 감지)',
+                'error': 'An unspecified error occurred within the pipeline chain.',
+                'details': 'Failure detected by link_error callback.',
+                'root_task_id': root_task_id,
+            }
+            # result_or_request_obj가 Exception 객체인지 확인하여 exc 인자로 전달 시도
+            final_exc = None
+            if isinstance(result_or_request_obj, Exception):
+                final_exc = result_or_request_obj
+            elif hasattr(result_or_request_obj, 'id'): # TaskRequest 객체인 경우
+                failed_task_result = AsyncResult(result_or_request_obj.id, app=celery_app)
+                if failed_task_result.failed():
+                    final_exc = failed_task_result.result # 실제 예외 객체
+            
+            _update_root_task_state(root_task_id, state=states.FAILURE, meta=failure_meta, exc=final_exc or ValueError("Pipeline failed (unknown reason from callback)"))
+        else:
+            logger.info(f"{log_prefix} Root task {root_task_id} was already marked as {current_status}. Callback confirms failure.")
+
 
 # 예외 정보 추출 헬퍼 함수 (기존 정의 유지)
 def get_detailed_error_info(exception_obj: Exception) -> Dict[str, str]:
