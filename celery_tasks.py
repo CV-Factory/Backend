@@ -184,7 +184,7 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
 
 
         iframe_handle = None
-        iframe_log_id = f"iframe-gen-{uuid.uuid4().hex[:6]}"
+        iframe_log_id = f"iframe-gen-{uuid.uuid4().hex[:6]}" 
         
         try:
             # iframe ID 가져오기 또는 설정 (오류 발생 가능성 있음)
@@ -219,6 +219,7 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
 
             iframe_src_attr = "[src attribute not found or error]"
             try:
+                # iframe_handle.get_attribute에는 timeout 인수가 없습니다.
                 iframe_src_attr = iframe_handle.get_attribute('src') or "[src attribute not found]"
             except Exception as e_get_src:
                 logger.warning(f"{log_prefix} Error getting src attribute for iframe {iframe_log_id}: {e_get_src}")
@@ -230,12 +231,12 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
                 child_frame = iframe_handle.content_frame() # 이 호출은 타임아웃을 직접 받지 않지만, 핸들이 유효하면 빠르게 반환됨
             except Exception as e_content_frame:
                 logger.error(f"{log_prefix} Error getting content_frame for iframe {iframe_log_id}: {e_content_frame}", exc_info=True)
-                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
+                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }") # JSHandle.evaluate에는 timeout 없음
                 continue
 
             if not child_frame: 
                 logger.warning(f"{log_prefix} content_frame is None for iframe {iframe_log_id}. Marking with error and skipping.")
-                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
+                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }") # JSHandle.evaluate에는 timeout 없음
                 continue
             
             child_frame_url_for_log = "[child frame URL not accessible]"
@@ -256,11 +257,11 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
                 logger.info(f"{log_prefix} Child_frame (ID: {iframe_log_id}, Final URL: {final_child_frame_url}) loaded.")
             except PlaywrightError as frame_load_ple: # Playwright TimeoutError 등
                 logger.error(f"{log_prefix} PlaywrightError (Timeout or other) loading child_frame {iframe_log_id} (src attr: {iframe_src_attr[:100]}, initial URL: {child_frame_url_for_log}): {frame_load_ple}", exc_info=True)
-                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
+                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }") # JSHandle.evaluate에는 timeout 없음
                 continue
             except Exception as frame_load_err: # 기타 예외
                 logger.error(f"{log_prefix} Generic error loading child_frame {iframe_log_id} (src attr: {iframe_src_attr[:100]}, initial URL: {child_frame_url_for_log}): {frame_load_err}", exc_info=True)
-                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
+                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }") # JSHandle.evaluate에는 timeout 없음
                 continue
 
             # --- 재귀 호출 ---
@@ -275,7 +276,7 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
                     child_html_content = f"<!-- iframe {iframe_log_id} (src: {iframe_src_attr[:100]}) content was empty post-recursion -->"
             except Exception as frame_content_err:
                 logger.error(f"{log_prefix} Error getting content from child_frame {iframe_log_id} (src: {iframe_src_attr[:100]}): {frame_content_err}", exc_info=True)
-                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
+                iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }") # JSHandle.evaluate에는 timeout 없음
                 continue # 이 iframe 처리는 실패로 간주하고 다음으로
 
             # iframe 내용을 div로 감싸서 교체할 HTML 생성
@@ -315,13 +316,13 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
                 is_connected_js = False
                 if iframe_handle and hasattr(iframe_handle, 'evaluate'):
                     try:
-                        is_connected_js = iframe_handle.evaluate('el => el.isConnected')
+                        is_connected_js = iframe_handle.evaluate('el => el.isConnected') # JSHandle.evaluate에는 timeout 없음
                     except Exception as e_eval_isconnected:
                         logger.warning(f"{log_prefix} Error evaluating 'el.isConnected' for iframe {iframe_log_id}: {e_eval_isconnected}")
                         is_connected_js = False # 평가 중 오류 발생 시 연결되지 않은 것으로 간주
 
                 if is_connected_js:
-                    iframe_handle.evaluate("(el, html) => { el.outerHTML = html; }", replacement_div_html)
+                    iframe_handle.evaluate("(el, html) => { el.outerHTML = html; }", replacement_div_html) # JSHandle.evaluate에는 timeout 없음
                     logger.info(f"{log_prefix} Successfully replaced iframe {iframe_log_id} with div wrapper.")
                     processed_iframe_count += 1
                 else:
@@ -338,8 +339,8 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
                     # locator로 다시 찾아, data-cvf-processing 상태가 아니어야 함 (이미 교체 시도 후)
                     # 아직 id로 찾을 수 있고, 에러가 마킹 안되었다면 시도
                     target_locator = current_playwright_context.locator(f'iframe[id="{iframe_log_id}"]:not([data-cvf-error="true"])')
-                    if target_locator.count() == 1:
-                         target_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                    if target_locator.count() == 1: # count에는 timeout 불필요
+                         target_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
                     else:
                         logger.warning(f"{log_prefix} iframe {iframe_log_id} not found or already marked for error after Playwright replacement failure.")
                 except Exception as e_mark:
@@ -349,8 +350,8 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
                 # 일반 예외에 대한 에러 마킹 (위와 유사하게)
                 try:
                     target_locator = current_playwright_context.locator(f'iframe[id="{iframe_log_id}"]:not([data-cvf-error="true"])')
-                    if target_locator.count() == 1:
-                         target_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                    if target_locator.count() == 1: # count에는 timeout 불필요
+                         target_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
                     else:
                         logger.warning(f"{log_prefix} iframe {iframe_log_id} not found or already marked for error after generic replacement failure.")
                 except Exception as e_mark_generic:
@@ -364,7 +365,7 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
                 try: 
                     # 핸들이 유효하다면 직접 사용
                     if not iframe_handle.is_hidden(): # DOM에 아직 존재하는지 확인 (최선은 아님)
-                         iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }")
+                         iframe_handle.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }") # JSHandle.evaluate에는 timeout 없음
                 except Exception as e_final_mark_err:
                     logger.warning(f"{log_prefix} Error during final attempt to mark iframe {iframe_log_id} as error in outer_iframe_loop: {e_final_mark_err}")
             # 다음 iframe 처리를 위해 continue
@@ -385,7 +386,7 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
                 # 루프 초반에 사용했던 `iframe_locator` 변수는 다음 루프를 위해 `first`로 재할당되므로
                 # 여기서 ID로 다시 찾아야 함.
                 problematic_iframe_locator = current_playwright_context.locator(f'iframe[id="{iframe_log_id}"][data-cvf-processing="true"]')
-                if problematic_iframe_locator.count() == 1:
+                if problematic_iframe_locator.count() == 1: # count에는 timeout 불필요
                     logger.warning(f"{log_prefix} iframe {iframe_log_id} was left in 'processing' state after its loop. Marking as error.")
                     problematic_iframe_locator.evaluate("el => { el.setAttribute('data-cvf-error', 'true'); el.removeAttribute('data-cvf-processing'); }", timeout=EVALUATE_TIMEOUT_SHORT)
             except PlaywrightError as e_final_ple: # Playwright 타임아웃 등
@@ -401,9 +402,11 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
 
 @celery_app.task(bind=True, name='celery_tasks.step_1_extract_html', max_retries=1, default_retry_delay=10)
 def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
+    logger.info("GLOBAL_ENTRY_POINT: step_1_extract_html function called.") # 최상단 진입 로그 추가
     task_id = self.request.id
     log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step 1_extract_html]"
     logger.info(f"{log_prefix} ---------- Task started. URL: {url} ----------")
+    logger.debug(f"{log_prefix} Input URL: {url}, Chain Log ID: {chain_log_id}")
 
     # 루트 작업 상태 업데이트 (시작)
     _update_root_task_state(chain_log_id, f"(1_extract_html) HTML 추출 시작: {url}", details={'current_task_id': str(task_id), 'url_for_step1': url})
@@ -411,12 +414,15 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
     html_file_path = ""
     try:
         logger.info(f"{log_prefix} Initializing Playwright...")
+        logger.debug(f"{log_prefix} Playwright sync_playwright context starting...")
         with sync_playwright() as p:
+            logger.debug(f"{log_prefix} Playwright sync_playwright context active.")
             logger.info(f"{log_prefix} Playwright initialized. Launching browser...")
             try:
                 # browser = p.chromium.launch(headless=True) # 로컬 테스트 시
                 browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']) # Docker 환경
                 logger.info(f"{log_prefix} Browser launched.")
+                logger.debug(f"{log_prefix} Browser object: {browser}")
             except Exception as e_browser:
                 logger.error(f"{log_prefix} Error launching browser: {e_browser}", exc_info=True)
                 _update_root_task_state(chain_log_id, "(1_extract_html) 브라우저 실행 실패", status=states.FAILURE, error_info={'error': str(e_browser), 'traceback': traceback.format_exc()})
@@ -426,21 +432,25 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
             try:
                 page = browser.new_page()
                 logger.info(f"{log_prefix} New page created. Setting default timeout to {DEFAULT_PAGE_TIMEOUT}ms.")
+                logger.debug(f"{log_prefix} Page object: {page}")
                 page.set_default_timeout(DEFAULT_PAGE_TIMEOUT) # 모든 Playwright 작업에 대한 기본 타임아웃 설정
                 page.set_default_navigation_timeout(PAGE_NAVIGATION_TIMEOUT)
                 
                 logger.info(f"{log_prefix} Navigating to URL: {url}")
+                logger.debug(f"{log_prefix} Calling page.goto(\"{url}\", wait_until=\"domcontentloaded\")")
                 page.goto(url, wait_until="domcontentloaded") # 'load' 또는 'networkidle' 고려
                 logger.info(f"{log_prefix} Successfully navigated to URL. Current page URL: {page.url}")
+                logger.debug(f"{log_prefix} Navigation complete. Page URL after goto: {page.url}")
 
                 # 페이지 로드 후 추가적인 안정화 시간 (선택적)
                 # logger.info(f"{log_prefix} Waiting for 3 seconds for dynamic content to potentially load...")
                 # time.sleep(3)
 
                 logger.info(f"{log_prefix} Starting iframe processing and content extraction.")
-                # 이전 step_log_id 대신 현재 task_id 또는 고유한 식별자 사용
+                logger.debug(f"{log_prefix} Calling _get_playwright_page_content_with_iframes_processed for URL: {url}")
                 page_content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, str(task_id))
                 logger.info(f"{log_prefix} Page content extracted. Length: {len(page_content)}")
+                logger.debug(f"{log_prefix} Extracted page_content (first 500 chars): {page_content[:500]}")
 
                 # 파일 저장 로직
                 # ... (이하 동일)
@@ -476,8 +486,9 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
         unique_file_id = hashlib.md5((chain_log_id + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]
         html_file_name = f"{filename_base}_raw_html_{chain_log_id[:8]}_{unique_file_id}.html"
         html_file_path = os.path.join("logs", html_file_name)
-
+            
         logger.info(f"{log_prefix} Saving extracted HTML to: {html_file_path}")
+        logger.debug(f"{log_prefix} Opening file {html_file_path} for writing page_content (length: {len(page_content)}).")
         with open(html_file_path, "w", encoding="utf-8") as f:
             f.write(page_content)
         logger.info(f"{log_prefix} HTML content successfully saved to {html_file_path}.")
@@ -485,6 +496,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
         result_data = {"html_file_path": html_file_path, "original_url": url}
         _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 및 저장 완료", details={'html_file_path': html_file_path})
         logger.info(f"{log_prefix} ---------- Task finished successfully. Result: {result_data} ----------")
+        logger.debug(f"{log_prefix} Returning from step_1: {result_data}")
         return result_data
 
     except Reject as e_reject: # 명시적으로 Reject된 경우, Celery가 재시도 또는 실패 처리
@@ -521,7 +533,8 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
     step_log_id = "2_extract_text"
     log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id}]"
     logger.info(f"{log_prefix} ---------- Task started. Received prev_result: {prev_result} ----------")
-
+    logger.debug(f"{log_prefix} Input prev_result: {prev_result}, Chain Log ID: {chain_log_id}")
+    
     html_file_path = None
     original_url = "N/A"
     try:
@@ -541,11 +554,12 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
 
         extracted_text_file_path = None # 초기화
 
-        logger.debug(f"{log_prefix} Attempting to read HTML file content.")
+        logger.debug(f"{log_prefix} Attempting to read HTML file content from: {html_file_path}")
         with open(html_file_path, "r", encoding="utf-8") as f:
             html_content = f.read()
         logger.info(f"{log_prefix} Successfully read HTML file. Content length: {len(html_content)}")
-
+        logger.debug(f"{log_prefix} HTML content (first 500 chars): {html_content[:500]}")
+        
         logger.debug(f"{log_prefix} Initializing BeautifulSoup parser.")
         soup = BeautifulSoup(html_content, "html.parser")
         logger.info(f"{log_prefix} BeautifulSoup initialized.")
@@ -567,23 +581,24 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         logger.info(f"{log_prefix} Decomposed {decomposed_tags_count} unwanted tags ({tags_to_decompose}).")
         
         logger.debug(f"{log_prefix} Extracting text with soup.get_text().")
-        text = soup.get_text(separator="\n", strip=True)
+        text = soup.get_text(separator="\\n", strip=True)
         logger.info(f"{log_prefix} Initial text extracted. Length: {len(text)}. Applying regex.")
 
         logger.debug(f"{log_prefix} Normalizing whitespaces and newlines.")
         text_before_re = text
-        text = re.sub(r'[\s\xa0]+', ' ', text) # NBSP 포함 모든 공백류를 단일 공백으로
-        text = re.sub(r' (\n)+', '\n', text) # 공백 후 개행은 개행만
-        text = re.sub(r'(\n)+ ', '\n', text) # 개행 후 공백은 개행만
-        text = re.sub(r'(\n){2,}', '\n\n', text) # 2회 이상 연속 개행은 2회로
+        text = re.sub(r'[\\s\\xa0]+', ' ', text) # NBSP 포함 모든 공백류를 단일 공백으로
+        text = re.sub(r' (\\n)+', '\\n', text) # 공백 후 개행은 개행만
+        text = re.sub(r'(\\n)+ ', '\\n', text) # 개행 후 공백은 개행만
+        text = re.sub(r'(\\n){2,}', '\\n\\n', text) # 2회 이상 연속 개행은 2회로
         text = text.strip()
         logger.info(f"{log_prefix} Text after regex. Length: {len(text)}. (Before regex: {len(text_before_re)})")
+        logger.debug(f"{log_prefix} Final extracted text (first 500 chars): {text[:500]}")
 
         if not text:
             logger.warning(f"{log_prefix} No text extracted after processing from {html_file_path}. Resulting file will be empty or placeholder.")
             # 빈 텍스트도 파일로 저장하고 다음 단계로 넘길 수 있도록 처리 (필요시)
             # 또는 여기서 특정 오류를 발생시킬 수도 있음. 현재는 경고 후 진행.
-
+        
         logs_dir = "logs"
         logger.debug(f"{log_prefix} Ensuring logs directory exists: {logs_dir}")
         os.makedirs(logs_dir, exist_ok=True)
@@ -599,17 +614,19 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         extracted_text_file_path = os.path.join(logs_dir, unique_text_fn)
         logger.info(f"{log_prefix} Determined extracted text file path: {extracted_text_file_path}")
 
-        logger.debug(f"{log_prefix} Attempting to write extracted text to file.")
+        logger.debug(f"{log_prefix} Attempting to write extracted text (length: {len(text)}) to file: {extracted_text_file_path}")
         with open(extracted_text_file_path, "w", encoding="utf-8") as f:
             f.write(text)
         logger.info(f"{log_prefix} Text extracted and saved to: {extracted_text_file_path} (Final Length: {len(text)})")
         _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 파일 저장 완료", details={'text_file_path': extracted_text_file_path})
         
+        result_to_return = {"text_file_path": extracted_text_file_path, 
+                             "original_url": original_url, 
+                             "html_file_path": html_file_path # 로깅/추적용으로 유지
+                            }
         logger.info(f"{log_prefix} ---------- Task finished successfully. Returning result. ----------")
-        return {"text_file_path": extracted_text_file_path, 
-                "original_url": original_url, 
-                "html_file_path": html_file_path # 로깅/추적용으로 유지
-               }
+        logger.debug(f"{log_prefix} Returning from step_2: {result_to_return}")
+        return result_to_return
 
     except FileNotFoundError as e_fnf:
         logger.error(f"{log_prefix} FileNotFoundError during text extraction: {e_fnf}. HTML file path: {html_file_path}", exc_info=True)
@@ -658,8 +675,10 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
 
     filtered_text_file_path = None
     try:
+        logger.debug(f"{log_prefix} Reading raw text from: {raw_text_file_path}")
         with open(raw_text_file_path, "r", encoding="utf-8") as f:
             raw_text = f.read()
+        logger.debug(f"{log_prefix} Raw text length: {len(raw_text)}. Raw text (first 500 chars): {raw_text[:500]}")
 
         if not raw_text.strip():
             logger.warning(f"{log_prefix} Text file {raw_text_file_path} is empty. Saving as empty filtered file.")
@@ -673,8 +692,10 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
 
             llm_model = os.getenv("GROQ_LLM_MODEL", "llama3-70b-8192") 
             logger.info(f"{log_prefix} Using LLM: {llm_model} via Groq.")
+            logger.debug(f"{log_prefix} GROQ_API_KEY: {'*' * (len(groq_api_key) - 4) + groq_api_key[-4:] if groq_api_key else 'Not Set'}") # API 키 일부 마스킹
             
             chat = ChatGroq(temperature=0, groq_api_key=groq_api_key, model_name=llm_model)
+            logger.debug(f"{log_prefix} ChatGroq client initialized: {chat}")
             
             sys_prompt = ("You are an expert text processing assistant. Your task is to extract ONLY the core job description from the provided text. "
                           "Remove all extraneous information such as advertisements, company promotions, navigation links, sidebars, headers, footers, legal disclaimers, cookie notices, unrelated articles, and anything not directly related to the job's responsibilities, qualifications, and benefits. "
@@ -684,6 +705,7 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
             prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("human", human_template)])
             parser = StrOutputParser()
             llm_chain = prompt | chat | parser
+            logger.debug(f"{log_prefix} LLM chain constructed: {llm_chain}")
 
             logger.info(f"{log_prefix} Invoking LLM. Text length: {len(raw_text)}")
             MAX_LLM_INPUT_LEN = 24000 
@@ -694,8 +716,10 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
                 _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 입력 텍스트 일부 사용 (길이 초과)", 
                                         details={'original_len': len(raw_text), 'truncated_len': len(text_for_llm)})
             
+            logger.debug(f"{log_prefix} Text for LLM (first 500 chars): {text_for_llm[:500]}")
             filtered_content = llm_chain.invoke({"text_content": text_for_llm})
             logger.info(f"{log_prefix} LLM filtering complete. Output length: {len(filtered_content)}")
+            logger.debug(f"{log_prefix} Filtered content (first 500 chars): {filtered_content[:500]}")
 
             if filtered_content.strip() == "추출할 채용공고 내용 없음":
                 logger.warning(f"{log_prefix} LLM reported no extractable job content.")
@@ -707,19 +731,23 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
         unique_filtered_fn = sanitize_filename(f"{base_text_fn}_filtered_text", "txt", ensure_unique=True)
         filtered_text_file_path = os.path.join(logs_dir, unique_filtered_fn)
 
+        logger.debug(f"{log_prefix} Writing filtered content (length: {len(filtered_content)}) to: {filtered_text_file_path}")
         with open(filtered_text_file_path, "w", encoding="utf-8") as f:
             f.write(filtered_content)
         logger.info(f"{log_prefix} Filtered text saved to: {filtered_text_file_path}")
         _update_root_task_state(chain_log_id, f"({step_log_id}) 필터링된 텍스트 파일 저장 완료", details={'filtered_text_file_path': filtered_text_file_path})
 
-        return {"filtered_text_file_path": filtered_text_file_path, 
-                "original_url": original_url, 
-                "html_file_path": html_file_path, # 로깅/추적용
-                "raw_text_file_path": raw_text_file_path, # 로깅/추적용
-                "status_history": result.get("status_history", []),
-                "cover_letter_preview": filtered_content[:500] + ("..." if len(filtered_content) > 500 else ""),
-                "llm_model_used_for_cv": "N/A"
-               }
+        result_to_return = {"filtered_text_file_path": filtered_text_file_path, 
+                             "original_url": original_url, 
+                             "html_file_path": html_file_path, # 로깅/추적용
+                             "raw_text_file_path": raw_text_file_path, # 로깅/추적용
+                             "status_history": prev_result.get("status_history", []),
+                             "cover_letter_preview": filtered_content[:500] + ("..." if len(filtered_content) > 500 else ""),
+                             "llm_model_used_for_cv": "N/A"
+                            }
+        logger.info(f"{log_prefix} ---------- Task finished successfully. Returning result. ----------")
+        logger.debug(f"{log_prefix} Returning from step_3: {result_to_return}")
+        return result_to_return
 
     except Exception as e:
         logger.error(f"{log_prefix} Error filtering with LLM: {e}", exc_info=True)
@@ -739,6 +767,8 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
     task_id = self.request.id
     step_log_id = "4_generate_cover_letter"
     log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id}]"
+    logger.info(f"{log_prefix} ---------- Task started. Received prev_result: {prev_result}, User Prompt: {'Provided' if user_prompt_text else 'N/A'} ----------")
+    logger.debug(f"{log_prefix} Input prev_result: {prev_result}, Chain Log ID: {chain_log_id}, User Prompt Text: {user_prompt_text[:100] if user_prompt_text else 'None'}")
 
     filtered_text_file_path = prev_result.get("filtered_text_file_path")
     original_url = prev_result.get("original_url", "N/A")
@@ -758,8 +788,10 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
     
     cover_letter_file_path_final = None # 최종 자소서 파일 경로
     try:
+        logger.debug(f"{log_prefix} Reading filtered job text from: {filtered_text_file_path}")
         with open(filtered_text_file_path, "r", encoding="utf-8") as f:
             filtered_job_text = f.read()
+        logger.debug(f"{log_prefix} Filtered job text length: {len(filtered_job_text)}. Filtered job text (first 500 chars): {filtered_job_text[:500]}")
 
         if not filtered_job_text.strip() or \
            filtered_job_text.strip().startswith("<!-- LLM 분석:") or \
@@ -786,14 +818,16 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             return final_pipeline_result
         
         logger.info(f"{log_prefix} Calling LLM for cover letter. Text length: {len(filtered_job_text)}, Prompt length: {len(user_prompt_text if user_prompt_text else '')}")
+        logger.debug(f"{log_prefix} Job posting content for LLM (first 500 chars): {filtered_job_text[:500]}")
+        logger.debug(f"{log_prefix} User prompt for LLM: {user_prompt_text[:200] if user_prompt_text else 'None'}")
         
         # LLM을 호출하여 자기소개서 생성
-        logger.info(f"{log_prefix} Calling LLM for cover letter. Text length: {len(filtered_job_text)}, Prompt length: {len(user_prompt_text if user_prompt_text else '')}")
-        
         llm_cv_data_tuple = generate_cover_letter(
             job_posting_content=filtered_job_text,
             prompt=user_prompt_text
         )
+        logger.debug(f"{log_prefix} LLM (generate_cover_letter) returned: Type={type(llm_cv_data_tuple)}, Value (first 100 chars if str): {str(llm_cv_data_tuple)[:100] if isinstance(llm_cv_data_tuple, (str, tuple, dict)) else type(llm_cv_data_tuple)}")
+
 
         # 반환 값 처리 수정: 튜플의 각 요소를 직접 할당
         generated_cv_text = None
@@ -820,14 +854,20 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             # 실패 시, formatted_cv_text에 담긴 오류 메시지(있다면) 또는 일반 메시지를 사용
             error_message_from_llm = formatted_cv_text if formatted_cv_text else "LLM으로부터 유효한 자기소개서를 받지 못했습니다."
             raise ValueError(f"자기소개서 생성 실패: {error_message_from_llm}")
-
-        logger.info(f"{log_prefix} Cover letter generated successfully. Raw length: {len(generated_cv_text)}, Formatted length: {len(formatted_cv_text if formatted_cv_text else '')}")
         
+        logger.info(f"{log_prefix} Cover letter generated successfully. Raw length: {len(generated_cv_text)}, Formatted length: {len(formatted_cv_text if formatted_cv_text else '')}")
+        logger.debug(f"{log_prefix} Generated CV text (first 500 chars): {generated_cv_text[:500]}")
+        logger.debug(f"{log_prefix} Formatted CV text (first 500 chars): {(formatted_cv_text[:500] if formatted_cv_text else 'None')}")
+
+
         # 생성된 자기소개서 파일명 결정 (기존 파일명 활용하여 일관성 유지)
+        logs_dir = "logs"  # logs_dir 변수 정의
+        os.makedirs(logs_dir, exist_ok=True) # 디렉토리 생성 보장
         base_filename = os.path.splitext(os.path.basename(filtered_text_file_path))[0]
         unique_cv_fn = sanitize_filename(f"{base_filename}_cover_letter_{chain_log_id[:8]}", "txt", ensure_unique=True)
         cover_letter_file_path_final = os.path.join(logs_dir, unique_cv_fn)
 
+        logger.debug(f"{log_prefix} Writing final cover letter (length: {len(generated_cv_text)}) to: {cover_letter_file_path_final}")
         with open(cover_letter_file_path_final, "w", encoding="utf-8") as f:
             f.write(generated_cv_text)
         logger.info(f"{log_prefix} Cover letter saved to: {cover_letter_file_path_final}")
@@ -848,6 +888,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         logger.info(f"{log_prefix} Attempting to update root task {chain_log_id} with pipeline SUCCESS status. Details: {final_pipeline_result}")
         _update_root_task_state(chain_log_id, "파이프라인 성공적으로 완료", status=states.SUCCESS, details=final_pipeline_result)
         logger.info(f"{log_prefix} Root task {chain_log_id} updated with pipeline SUCCESS status.")
+        logger.debug(f"{log_prefix} Returning from step_4 (final pipeline result): {final_pipeline_result}")
         return final_pipeline_result # 이것이 체인의 최종 결과가 됨
         
     except Exception as e:
@@ -856,7 +897,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             try: os.remove(cover_letter_file_path_final)
             except Exception as e_remove: logger.warning(f"{log_prefix} Failed to remove partial CV file {cover_letter_file_path_final}: {e_remove}")
         
-        err_details = {'error': str(e), 'type': type(e).__name__, 'filtered_file': filtered_text_file_path, 'traceback': traceback.format_exc()}
+        err_details = {'error': str(e), 'type': type(e).__name__, 'filtered_file': raw_text_file_path, 'traceback': traceback.format_exc()}
         logger.error(f"{log_prefix} Attempting to update root task {chain_log_id} with pipeline FAILURE status due to exception. Error details: {err_details}")
         _update_root_task_state(chain_log_id, f"({step_log_id}) 자소서 생성 실패", status=states.FAILURE, error_info=err_details)
         logger.error(f"{log_prefix} Root task {chain_log_id} updated with pipeline FAILURE status.")
@@ -868,29 +909,36 @@ def process_job_posting_pipeline(self, url: str, user_prompt: Optional[str] = No
     root_task_id = self.request.id # 이 ID가 chain_log_id로 사용됨
     log_prefix = f"[Pipeline / Root {root_task_id}]"
     logger.info(f"{log_prefix} Initiating pipeline for URL: {url}, User Prompt: {'Provided' if user_prompt else 'N/A'}")
+    logger.debug(f"{log_prefix} Root Task ID (self.request.id): {root_task_id}")
+    logger.debug(f"{log_prefix} URL: {url}, User Prompt (first 100 chars): {user_prompt[:100] if user_prompt else 'N/A'}")
+
 
     _update_root_task_state(root_task_id, "파이프라인 시작됨", status=states.STARTED, 
                             details={'url': url, 'user_prompt_provided': bool(user_prompt)})
+    logger.debug(f"{log_prefix} Root task state updated to STARTED.")
 
     # Celery 체인 정의 (가장 일반적이고 이해하기 쉬운 형태):
-    processing_chain_final = chain(
-        step_1_extract_html.s(url=url, chain_log_id=root_task_id),
-        step_2_extract_text.s(chain_log_id=root_task_id),
-        step_3_filter_content.s(chain_log_id=root_task_id),
-        step_4_generate_cover_letter.s(chain_log_id=root_task_id, user_prompt_text=user_prompt) # user_prompt_text는 명시적 kwargs로 전달
-    )
-
-    logger.info(f"{log_prefix} Celery chain created: {processing_chain_final}")
+    s1 = step_1_extract_html.s(url=url, chain_log_id=root_task_id)
+    s2 = step_2_extract_text.s(chain_log_id=root_task_id)
+    s3 = step_3_filter_content.s(chain_log_id=root_task_id)
+    s4 = step_4_generate_cover_letter.s(chain_log_id=root_task_id, user_prompt_text=user_prompt) # user_prompt_text는 명시적 kwargs로 전달
+    logger.debug(f"{log_prefix} Sub-task signatures defined: s1={s1}, s2={s2}, s3={s3}, s4={s4}")
     
+    processing_chain_final = chain(s1, s2, s3, s4)
+    logger.debug(f"{log_prefix} Chain object created: {processing_chain_final}")
+
+    # 체인 구조 로깅 개선
+    chain_structure_log = f"{s1.name}(...) | {s2.name}(...) | {s3.name}(...) | {s4.name}(...)"
+    logger.info(f"{log_prefix} Celery chain structure defined: {chain_structure_log}")
+    logger.info(f"{log_prefix} Full chain object: {processing_chain_final}") # 전체 체인 객체도 로깅
+
+    # 임시 테스트 코드 제거하고 원래 체인 실행 로직으로 복원
     try:
-        # 체인 실행. 체인 자체에 대한 ID는 Celery가 자동 생성 또는 apply_async에서 지정 가능.
-        # 여기서 중요한 것은 root_task_id로 전체 파이프라인 상태를 추적하는 것.
         chain_async_result = processing_chain_final.apply_async()
-        
         logger.info(f"{log_prefix} Dispatched chain. Last task ID in chain: {chain_async_result.id}. Polling root ID: {root_task_id}")
-        
-        # 이 태스크는 체인을 시작시키고, 클라이언트가 폴링할 루트 작업 ID를 반환.
-        return root_task_id
+        logger.debug(f"{log_prefix} Chain dispatched. AsyncResult: id={chain_async_result.id}, parent_id={chain_async_result.parent.id if chain_async_result.parent else 'None'}, root_id={chain_async_result.root_id}")
+        logger.debug(f"{log_prefix} Returning root_task_id: {root_task_id} from process_job_posting_pipeline.")
+        return root_task_id # 파이프라인의 루트 ID 반환
         
     except Exception as e_chain_dispatch:
         logger.error(f"{log_prefix} Failed to dispatch chain: {e_chain_dispatch}", exc_info=True)
