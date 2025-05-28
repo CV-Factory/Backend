@@ -493,7 +493,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
             f.write(page_content)
         logger.info(f"{log_prefix} HTML content successfully saved to {html_file_path}.")
 
-        result_data = {"html_file_path": html_file_path, "original_url": url}
+        result_data = {"html_file_path": html_file_path, "original_url": url, "page_content": page_content} # page_content 추가
         _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 및 저장 완료", details={'html_file_path': html_file_path})
         logger.info(f"{log_prefix} ---------- Task finished successfully. Result: {result_data} ----------")
         logger.debug(f"{log_prefix} Returning from step_1: {result_data}")
@@ -537,28 +537,42 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
     
     html_file_path = None
     original_url = "N/A"
+    page_content = None # page_content 받을 변수 추가
     try:
-        html_file_path = prev_result.get("html_file_path")
+        # html_file_path는 로깅 및 파일명 생성에만 사용, 실제 내용은 page_content에서 가져옴
+        html_file_path = prev_result.get("html_file_path") 
         original_url = prev_result.get("original_url", "N/A")
-        logger.info(f"{log_prefix} Extracted html_file_path: {html_file_path}, original_url: {original_url}")
+        page_content = prev_result.get("page_content") # page_content 가져오기
 
-        if not html_file_path or not isinstance(html_file_path, str) or not os.path.exists(html_file_path):
-            error_msg = f"HTML file not found, path invalid, or not a string: {html_file_path} (type: {type(html_file_path).__name__})"
+        logger.info(f"{log_prefix} Received html_file_path: {html_file_path}, original_url: {original_url}, page_content length: {len(page_content) if page_content else 'N/A'}")
+
+        if not page_content:
+            error_msg = f"Page content is missing from previous step result: {prev_result.keys()}"
             logger.error(f"{log_prefix} {error_msg}")
-            _update_root_task_state(chain_log_id, f"({step_log_id}) 입력 HTML 파일 오류", status=states.FAILURE, error_info={'error': error_msg, 'path_checked': str(html_file_path)})
-            # 중요: 여기서 ValueError를 발생시켜 Celery가 재시도하거나 실패 처리하도록 함
+            _update_root_task_state(chain_log_id, f"({step_log_id}) 이전 단계 HTML 내용 없음", status=states.FAILURE, error_info={'error': error_msg})
             raise ValueError(error_msg)
 
-        logger.info(f"{log_prefix} Starting text extraction from valid HTML file: {html_file_path}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) HTML에서 텍스트 추출 시작", details={'html_file_path': html_file_path, 'current_task_id': task_id})
+        # html_file_path 유효성 검사는 파일 저장 시에만 필요할 수 있으나, 로깅을 위해 유지
+        if not html_file_path or not isinstance(html_file_path, str):
+            logger.warning(f"{log_prefix} html_file_path is invalid ({html_file_path}), will use placeholder for saving text file if needed, but proceeding with page_content.")
+            # 파일 이름 생성을 위한 임시 base_html_fn (URL 기반)
+            base_html_fn_for_saving = sanitize_filename(original_url if original_url != "N/A" else "unknown_source", ensure_unique=False) + f"_{chain_log_id[:8]}"
+        else:
+            base_html_fn_for_saving = os.path.splitext(os.path.basename(html_file_path))[0]
+            base_html_fn_for_saving = re.sub(r'_raw_html_[a-f0-9]{8}_[a-f0-9]{8}$', '', base_html_fn_for_saving) # 고유 ID 패턴 수정
+
+        logger.info(f"{log_prefix} Starting text extraction from page_content (length: {len(page_content)})")
+        _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 내용에서 텍스트 추출 시작", details={'current_task_id': task_id})
 
         extracted_text_file_path = None # 초기화
+        html_content = page_content # 파일에서 읽는 대신 직접 사용
 
-        logger.debug(f"{log_prefix} Attempting to read HTML file content from: {html_file_path}")
-        with open(html_file_path, "r", encoding="utf-8") as f:
-            html_content = f.read()
-        logger.info(f"{log_prefix} Successfully read HTML file. Content length: {len(html_content)}")
-        logger.debug(f"{log_prefix} HTML content (first 500 chars): {html_content[:500]}")
+        # 이전의 파일 읽기 로직은 제거합니다.
+        # logger.debug(f"{log_prefix} Attempting to read HTML file content from: {html_file_path}")
+        # with open(html_file_path, "r", encoding="utf-8") as f:
+        #     html_content = f.read()
+        # logger.info(f"{log_prefix} Successfully read HTML file. Content length: {len(html_content)}")
+        logger.debug(f"{log_prefix} HTML content from prev_result (first 500 chars): {html_content[:500]}")
         
         logger.debug(f"{log_prefix} Initializing BeautifulSoup parser.")
         soup = BeautifulSoup(html_content, "html.parser")
@@ -644,13 +658,14 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         logger.debug(f"{log_prefix} Ensuring logs directory exists: {logs_dir}")
         os.makedirs(logs_dir, exist_ok=True)
         
-        logger.debug(f"{log_prefix} Sanitizing filename. Original html_file_path: {html_file_path}")
-        base_html_fn = os.path.splitext(os.path.basename(html_file_path))[0]
-        logger.debug(f"{log_prefix} base_html_fn (splitext): {base_html_fn}")
-        base_html_fn = re.sub(r'_raw_html_[a-f0-9]{8}$', '', base_html_fn) # _raw_html_xxxxxxx 부분 제거
-        logger.debug(f"{log_prefix} base_html_fn (after re.sub): {base_html_fn}")
+        logger.debug(f"{log_prefix} Sanitizing filename. Original html_file_path info for naming: {html_file_path if html_file_path else base_html_fn_for_saving}")
+        # base_html_fn은 위에서 이미 계산됨 (base_html_fn_for_saving 사용)
+        # base_html_fn = os.path.splitext(os.path.basename(html_file_path))[0]
+        # logger.debug(f"{log_prefix} base_html_fn (splitext): {base_html_fn}")
+        # base_html_fn = re.sub(r'_raw_html_[a-f0-9]{8}$', '', base_html_fn) # _raw_html_xxxxxxx 부분 제거
+        # logger.debug(f"{log_prefix} base_html_fn (after re.sub): {base_html_fn}")
         
-        unique_text_fn_stem = f"{base_html_fn}_extracted_text"
+        unique_text_fn_stem = f"{base_html_fn_for_saving}_extracted_text"
         unique_text_fn = sanitize_filename(unique_text_fn_stem, "txt", ensure_unique=True)
         extracted_text_file_path = os.path.join(logs_dir, unique_text_fn)
         logger.info(f"{log_prefix} Determined extracted text file path: {extracted_text_file_path}")
@@ -663,10 +678,11 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         
         result_to_return = {"text_file_path": extracted_text_file_path, 
                              "original_url": original_url, 
-                             "html_file_path": html_file_path # 로깅/추적용으로 유지
+                             "html_file_path": html_file_path, # 로깅/추적용으로 유지
+                             "extracted_text": text # 추출된 텍스트 직접 전달
                             }
         logger.info(f"{log_prefix} ---------- Task finished successfully. Returning result. ----------")
-        logger.debug(f"{log_prefix} Returning from step_2: {result_to_return}")
+        logger.debug(f"{log_prefix} Returning from step_2: {result_to_return.keys()}, extracted_text length: {len(text)}")
         return result_to_return
 
     except FileNotFoundError as e_fnf:
@@ -701,25 +717,35 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
     step_log_id = "3_filter_content"
     log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id}]"
     
-    raw_text_file_path = prev_result.get("text_file_path")
+    raw_text_file_path = prev_result.get("text_file_path") # 파일명 생성 및 로깅용
     original_url = prev_result.get("original_url", "N/A")
     html_file_path = prev_result.get("html_file_path") # 로깅/추적용
+    extracted_text = prev_result.get("extracted_text") # 실제 내용
 
-    if not raw_text_file_path or not os.path.exists(raw_text_file_path):
-        error_msg = f"Text file not found or path invalid: {raw_text_file_path}"
+    if not extracted_text:
+        error_msg = f"Extracted text is missing from previous step result: {prev_result.keys()}"
         logger.error(f"{log_prefix} {error_msg}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 입력 텍스트 파일 없음", status=states.FAILURE, error_info={'error': error_msg, 'path_checked': raw_text_file_path})
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 이전 단계 텍스트 내용 없음", status=states.FAILURE, error_info={'error': error_msg})
         raise ValueError(error_msg)
 
-    logger.info(f"{log_prefix} Starting LLM filtering for: {raw_text_file_path}")
-    _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 채용공고 필터링 시작", details={'raw_text_file_path': raw_text_file_path, 'current_task_id': task_id})
+    # raw_text_file_path는 파일 저장 시 이름 기반으로 사용될 수 있으므로 유효성 검사 또는 생성 로직 필요
+    if not raw_text_file_path or not isinstance(raw_text_file_path, str):
+        logger.warning(f"{log_prefix} raw_text_file_path is invalid ({raw_text_file_path}). Will use placeholder for saving filtered file name.")
+        base_text_fn_for_saving = sanitize_filename(original_url if original_url != "N/A" else "unknown_source_text", ensure_unique=False) + f"_{chain_log_id[:8]}"
+    else:
+        base_text_fn_for_saving = os.path.splitext(os.path.basename(raw_text_file_path))[0].replace("_extracted_text","")
+
+    logger.info(f"{log_prefix} Starting LLM filtering for text (length: {len(extracted_text)}). Associated raw_text_file_path for logging: {raw_text_file_path}")
+    _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 채용공고 필터링 시작", details={'current_task_id': task_id})
 
     filtered_text_file_path = None
+    raw_text = extracted_text # 파일에서 읽는 대신 직접 사용
     try:
-        logger.debug(f"{log_prefix} Reading raw text from: {raw_text_file_path}")
-        with open(raw_text_file_path, "r", encoding="utf-8") as f:
-            raw_text = f.read()
-        logger.debug(f"{log_prefix} Raw text length: {len(raw_text)}. Raw text (first 500 chars): {raw_text[:500]}")
+        # 이전의 파일 읽기 로직은 제거합니다.
+        # logger.debug(f"{log_prefix} Reading raw text from: {raw_text_file_path}")
+        # with open(raw_text_file_path, "r", encoding="utf-8") as f:
+        #     raw_text = f.read()
+        logger.debug(f"{log_prefix} Raw text from prev_result (length: {len(raw_text)}). Raw text (first 500 chars): {raw_text[:500]}")
 
         if not raw_text.strip():
             logger.warning(f"{log_prefix} Text file {raw_text_file_path} is empty. Saving as empty filtered file.")
@@ -787,8 +813,9 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
 
         logs_dir = "logs"
         os.makedirs(logs_dir, exist_ok=True)
-        base_text_fn = os.path.splitext(os.path.basename(raw_text_file_path))[0].replace("_extracted_text","")
-        unique_filtered_fn = sanitize_filename(f"{base_text_fn}_filtered_text", "txt", ensure_unique=True)
+        # base_text_fn은 위에서 base_text_fn_for_saving으로 계산됨
+        # base_text_fn = os.path.splitext(os.path.basename(raw_text_file_path))[0].replace("_extracted_text","")
+        unique_filtered_fn = sanitize_filename(f"{base_text_fn_for_saving}_filtered_text", "txt", ensure_unique=True)
         filtered_text_file_path = os.path.join(logs_dir, unique_filtered_fn)
 
         logger.debug(f"{log_prefix} Writing filtered content (length: {len(filtered_content)}) to: {filtered_text_file_path}")
@@ -803,10 +830,11 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
                              "raw_text_file_path": raw_text_file_path, # 로깅/추적용
                              "status_history": prev_result.get("status_history", []),
                              "cover_letter_preview": filtered_content[:500] + ("..." if len(filtered_content) > 500 else ""),
-                             "llm_model_used_for_cv": "N/A"
+                             "llm_model_used_for_cv": "N/A",
+                             "filtered_content": filtered_content # 필터링된 텍스트 직접 전달
                             }
         logger.info(f"{log_prefix} ---------- Task finished successfully. Returning result. ----------")
-        logger.debug(f"{log_prefix} Returning from step_3: {result_to_return}")
+        logger.debug(f"{log_prefix} Returning from step_3: {result_to_return.keys()}, filtered_content length: {len(filtered_content)}")
         return result_to_return
 
     except Exception as e:
@@ -834,24 +862,36 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
     original_url = prev_result.get("original_url", "N/A")
     html_file_path = prev_result.get("html_file_path")
     raw_text_file_path = prev_result.get("raw_text_file_path")
+    filtered_job_text = prev_result.get("filtered_content") # 실제 내용
 
-    if not filtered_text_file_path or not os.path.exists(filtered_text_file_path):
-        error_msg = f"Filtered text file not found or path invalid: {filtered_text_file_path}"
+    if not filtered_job_text:
+        # filtered_text_file_path가 없을 수도 있으므로, filtered_job_text 기준으로 오류 처리
+        error_msg = f"Filtered content is missing from previous step result: {prev_result.keys()}"
         logger.error(f"{log_prefix} {error_msg}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 입력 필터링된 텍스트 파일 없음", status=states.FAILURE, error_info={'error': error_msg, 'path_checked': filtered_text_file_path})
-        # 이 단계에서 실패하면 파이프라인 실패임
-        raise ValueError(error_msg) 
+        _update_root_task_state(chain_log_id, f"({step_log_id}) 이전 단계 필터링된 내용 없음", status=states.FAILURE, error_info={'error': error_msg})
+        raise ValueError(error_msg)
 
-    logger.info(f"{log_prefix} Starting cover letter generation. Filtered file: {filtered_text_file_path}, User prompt: {'Yes' if user_prompt_text else 'No'}")
+    # filtered_text_file_path는 파일 저장 시 이름 기반으로 사용될 수 있으므로 유효성 검사 또는 생성 로직 필요
+    # 이 값은 로깅이나 결과에 포함될 수 있음
+    if not filtered_text_file_path or not isinstance(filtered_text_file_path, str):
+        logger.warning(f"{log_prefix} filtered_text_file_path is invalid ({filtered_text_file_path}). Cover letter file name will be based on URL/Chain ID.")
+        # 파일명 생성을 위한 fallback
+        base_cv_fn_for_saving = sanitize_filename(original_url if original_url != "N/A" else "unknown_filtered_source", ensure_unique=False) + f"_{chain_log_id[:8]}"
+    else:
+        # 기존 filtered_text_file_path에서 base 부분을 가져오려고 시도
+        base_cv_fn_for_saving = os.path.splitext(os.path.basename(filtered_text_file_path))[0].replace("_filtered_text","")
+
+    logger.info(f"{log_prefix} Starting cover letter generation. Filtered text length: {len(filtered_job_text)}, User prompt: {'Yes' if user_prompt_text else 'No'}. Associated filtered_text_file_path for logging: {filtered_text_file_path}")
     _update_root_task_state(chain_log_id, f"({step_log_id}) 자기소개서 생성 시작", 
-                            details={'filtered_file': filtered_text_file_path, 'user_prompt': bool(user_prompt_text), 'current_task_id': task_id})
+                            details={'user_prompt': bool(user_prompt_text), 'current_task_id': task_id})
     
     cover_letter_file_path_final = None # 최종 자소서 파일 경로
     try:
-        logger.debug(f"{log_prefix} Reading filtered job text from: {filtered_text_file_path}")
-        with open(filtered_text_file_path, "r", encoding="utf-8") as f:
-            filtered_job_text = f.read()
-        logger.debug(f"{log_prefix} Filtered job text length: {len(filtered_job_text)}. Filtered job text (first 500 chars): {filtered_job_text[:500]}")
+        # 이전의 파일 읽기 로직은 제거합니다.
+        # logger.debug(f"{log_prefix} Reading filtered job text from: {filtered_text_file_path}")
+        # with open(filtered_text_file_path, "r", encoding="utf-8") as f:
+        #     filtered_job_text = f.read()
+        logger.debug(f"{log_prefix} Filtered job text from prev_result (length: {len(filtered_job_text)}). Filtered job text (first 500 chars): {filtered_job_text[:500]}")
 
         if not filtered_job_text.strip() or \
            filtered_job_text.strip().startswith("<!-- LLM 분석:") or \
@@ -930,13 +970,13 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         logs_dir = "logs"
         os.makedirs(logs_dir, exist_ok=True)
 
-        # 원본 URL과 chain_log_id를 기반으로 파일명 생성
-        url_for_base = original_url if isinstance(original_url, str) else "unknown_url"
+        # 원본 URL과 chain_log_id를 기반으로 파일명 생성 (base_cv_fn_for_saving 사용)
+        # url_for_base = original_url if isinstance(original_url, str) else "unknown_url"
         # URL에서 기본적인 파일명 부분을 추출 (여기서는 해시나 확장자 없이)
-        temp_base_from_url = sanitize_filename(url_for_base, extension="", ensure_unique=False)
+        # temp_base_from_url = sanitize_filename(url_for_base, extension="", ensure_unique=False)
         
         # 자기소개서 파일용 최종 스템 구성
-        cover_letter_filename_stem = f"{temp_base_from_url}_{chain_log_id[:8]}_coverletter"
+        cover_letter_filename_stem = f"{base_cv_fn_for_saving}_coverletter" # base_cv_fn_for_saving 사용
         
         # 최종적으로 고유한 파일명 생성 (해시 및 확장자 포함)
         unique_cv_fn = sanitize_filename(cover_letter_filename_stem, "txt", ensure_unique=True)
