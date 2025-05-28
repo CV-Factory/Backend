@@ -1,7 +1,7 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException, status, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, status, Query, Path
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from typing import Any
@@ -228,6 +228,34 @@ async def get_task_status(task_id: str):
         logger.error(f"작업 상태 조회 중 심각한 오류 발생 (Task ID: {task_id}): {e}. 소요 시간: {end_time - start_time:.4f}초", exc_info=True)
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=503, detail=f"Error fetching task status for {task_id}. Please try again later.")
+
+@app.get("/logs/{filename}", response_class=PlainTextResponse)
+async def get_log_file_content(filename: str = Path(..., description="로그 파일 이름", regex="^[a-zA-Z0-9_\\.\\-@]+$")):
+    logger.info(f"로그 파일 내용 요청: {filename}")
+    # 기본적인 경로 조작 방지
+    if ".." in filename or "/" in filename or "\\\\" in filename:
+        logger.warning(f"잘못된 파일 이름 접근 시도: {filename}")
+        raise HTTPException(status_code=400, detail="잘못된 파일 이름입니다.")
+    
+    log_file_path = os.path.join("logs", filename)
+    logger.info(f"요청된 로그 파일 경로: {log_file_path}")
+    
+    if not os.path.exists(log_file_path):
+        logger.warning(f"요청한 로그 파일을 찾을 수 없음: {log_file_path}")
+        raise HTTPException(status_code=404, detail=f"로그 파일을 찾을 수 없습니다: {filename}")
+    
+    if not os.path.isfile(log_file_path):
+        logger.warning(f"요청한 경로가 파일이 아님: {log_file_path}")
+        raise HTTPException(status_code=400, detail=f"요청한 경로는 파일이 아닙니다: {filename}")
+
+    try:
+        with open(log_file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        logger.info(f"로그 파일 내용 성공적으로 읽음: {filename} (내용 일부: {content[:100]}...)")
+        return PlainTextResponse(content=content)
+    except Exception as e:
+        logger.error(f"로그 파일 읽기 중 오류 발생 ({filename}): {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"로그 파일 읽기 중 오류 발생: {filename}")
 
 @app.get("/")
 async def health_check():
