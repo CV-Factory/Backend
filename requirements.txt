@@ -13,4 +13,5 @@ langchain-experimental
 langchain-groq  # Groq API 사용을 위해 추가
 celery
 redis
-beautifulsoup4 
+beautifulsoup4
+python-multipart 
