@@ -45,7 +45,7 @@ except Exception as e_dotenv:
     logger.error(f"Error loading .env file: {e_dotenv}", exc_info=True)
 
 # 상수 정의
-MAX_IFRAME_DEPTH = 2
+MAX_IFRAME_DEPTH = 1
 IFRAME_LOAD_TIMEOUT = 30000
 ELEMENT_HANDLE_TIMEOUT = 20000
 PAGE_NAVIGATION_TIMEOUT = 120000
@@ -161,7 +161,7 @@ def _flatten_iframes_in_live_dom_sync(current_playwright_context,
         # 계속 진행하되, 루프 조건이 이를 처리할 것임
 
     loop_iteration_count = 0
-    max_loop_iterations = initial_count + 5 # 무한 루프 방지를 위한 안전장치 (초기 카운트보다 약간 더 많이)
+    max_loop_iterations = initial_count + 10 # 무한 루프 방지를 위한 안전장치 (초기 카운트보다 약간 더 많이)
 
     while loop_iteration_count < max_loop_iterations:
         loop_iteration_count += 1
@@ -450,7 +450,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
                 logger.debug(f"{log_prefix} Calling _get_playwright_page_content_with_iframes_processed for URL: {url}")
                 page_content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, str(task_id))
                 logger.info(f"{log_prefix} Page content extracted. Length: {len(page_content)}")
-                logger.debug(f"{log_prefix} Extracted page_content (first 500 chars): {page_content[:500]}")
+                logger.debug(f"{log_prefix} Extracted page_content successfully (length verified).")
 
                 # 파일 저장 로직
                 # ... (이하 동일)
@@ -572,12 +572,13 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         # with open(html_file_path, "r", encoding="utf-8") as f:
         #     html_content = f.read()
         # logger.info(f"{log_prefix} Successfully read HTML file. Content length: {len(html_content)}")
-        logger.debug(f"{log_prefix} HTML content from prev_result (first 500 chars): {html_content[:500]}")
+        logger.debug(f"{log_prefix} HTML content from prev_result successfully received (length verified as {len(html_content)}).")
         
         logger.debug(f"{log_prefix} Initializing BeautifulSoup parser.")
         soup = BeautifulSoup(html_content, "html.parser")
         logger.info(f"{log_prefix} BeautifulSoup initialized.")
 
+        # 원래 로직으로 복원
         logger.debug(f"{log_prefix} Removing comments.")
         comments_removed_count = 0
         for el in soup.find_all(string=lambda text_node: isinstance(text_node, Comment)):
@@ -594,8 +595,10 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
                 decomposed_tags_count +=1
         logger.info(f"{log_prefix} Decomposed {decomposed_tags_count} unwanted tags ({tags_to_decompose}).")
         
-        logger.debug(f"{log_prefix} Extracting text with soup.get_text().")
-        text = soup.get_text(separator="\n", strip=True)
+        target_soup_object = soup # target_soup_object를 soup로 설정
+
+        logger.debug(f"{log_prefix} Extracting text with target_soup_object.get_text().")
+        text = target_soup_object.get_text(separator="\\n", strip=True)
         logger.info(f"{log_prefix} Initial text extracted. Length: {len(text)}.")
         logger.debug(f"{log_prefix} Initial text (first 500 chars): {text[:500]}")
 
