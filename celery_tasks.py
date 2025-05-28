@@ -581,18 +581,59 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         logger.info(f"{log_prefix} Decomposed {decomposed_tags_count} unwanted tags ({tags_to_decompose}).")
         
         logger.debug(f"{log_prefix} Extracting text with soup.get_text().")
-        text = soup.get_text(separator="\\n", strip=True)
-        logger.info(f"{log_prefix} Initial text extracted. Length: {len(text)}. Applying regex.")
+        text = soup.get_text(separator="\n", strip=True)
+        logger.info(f"{log_prefix} Initial text extracted. Length: {len(text)}.")
+        logger.debug(f"{log_prefix} Initial text (first 500 chars): {text[:500]}")
 
-        logger.debug(f"{log_prefix} Normalizing whitespaces and newlines.")
-        text_before_re = text
-        text = re.sub(r'[\\s\\xa0]+', ' ', text) # NBSP 포함 모든 공백류를 단일 공백으로
-        text = re.sub(r' (\\n)+', '\\n', text) # 공백 후 개행은 개행만
-        text = re.sub(r'(\\n)+ ', '\\n', text) # 개행 후 공백은 개행만
-        text = re.sub(r'(\\n){2,}', '\\n\\n', text) # 2회 이상 연속 개행은 2회로
-        text = text.strip()
-        logger.info(f"{log_prefix} Text after regex. Length: {len(text)}. (Before regex: {len(text_before_re)})")
-        logger.debug(f"{log_prefix} Final extracted text (first 500 chars): {text[:500]}")
+        # Specific cleanup for stray literal 'n' characters acting as separators
+        logger.debug(f"{log_prefix} Starting specific 'n' cleanup.")
+        original_text_before_n_cleanup = text
+        # Replace " n" (space then n) followed by a non-space char, with a space. " X nY" -> " X Y"
+        text = re.sub(r'\s+n(?=\S)', ' ', text)
+        # Replace a non-space char, followed by "n " (n then space), with a space. "Xn Y" -> "X Y"
+        text = re.sub(r'(?<=\S)n\s+', ' ', text)
+        # Replace isolated " n " (space-n-space) with a single space
+        text = re.sub(r'\s+n\s+', ' ', text)
+        if text != original_text_before_n_cleanup:
+            logger.info(f"{log_prefix} Text after specific 'n' cleanup. Length: {len(text)}.")
+            logger.debug(f"{log_prefix} Text after 'n' cleanup (first 500 chars): {text[:500]}")
+        else:
+            logger.debug(f"{log_prefix} No changes made by specific 'n' cleanup.")
+
+        # Normalize all whitespaces (including \xa0) to a single space,
+        # BUT preserve actual newlines \n for now.
+        # First, replace \xa0 and multiple horizontal spaces (space, tab etc.) with a single space.
+        text = re.sub(r'[ \t\r\f\v\xa0]+', ' ', text)
+        logger.debug(f"{log_prefix} Text after initial horizontal space/nbsp normalization (newlines preserved for now). Length: {len(text)}")
+        
+        # Now, normalize newlines and spaces around them
+        text = re.sub(r' *\n *', '\n', text) # Remove spaces around newlines: " \n " -> "\n"
+        text = re.sub(r'\n{2,}', '\n\n', text) # Reduce multiple newlines to max two
+        text = text.strip() # Remove leading/trailing whitespace (including newlines if they are at ends)
+        logger.info(f"{log_prefix} Text after newline and space normalization. Length: {len(text)}.")
+        logger.debug(f"{log_prefix} Normalized text (first 500 chars): {text[:500]}")
+
+        # Now, convert to single line for 50-char formatting
+        logger.debug(f"{log_prefix} Converting to single line by replacing ACTUAL NEWLINES (\n) with SPACES.")
+        text_single_line = text.replace('\n', ' ') # Replace ACTUAL newlines with a space
+        text_single_line = re.sub(r'\s+', ' ', text_single_line).strip() # Consolidate any multiple spaces that formed
+        logger.info(f"{log_prefix} Text converted to single line. Length: {len(text_single_line)}")
+        logger.debug(f"{log_prefix} Single line text (first 500 chars): {text_single_line[:500]}")
+
+        # 매 50자마다 실제 개행 문자를 삽입합니다.
+        logger.debug(f"{log_prefix} Inserting ACTUAL newline (\n) every 50 characters.")
+        chars_per_line = 50
+        text_formatted = ""
+        if text_single_line: # 빈 문자열이 아닐 경우에만 처리
+            # Insert ACTUAL newlines
+            text_formatted = '\n'.join(text_single_line[i:i+chars_per_line] for i in range(0, len(text_single_line), chars_per_line))
+            logger.info(f"{log_prefix} Text formatted with newlines every {chars_per_line} characters. New length: {len(text_formatted)}")
+        else:
+            logger.info(f"{log_prefix} Single line text was empty, skipping 50-char formatting.")
+            text_formatted = text_single_line # 빈 문자열 그대로 유지
+
+        text = text_formatted # 최종 결과를 text 변수에 할당
+        logger.debug(f"{log_prefix} Final extracted text for saving (first 500 chars): {text[:500]}")
 
         if not text:
             logger.warning(f"{log_prefix} No text extracted after processing from {html_file_path}. Resulting file will be empty or placeholder.")
@@ -707,7 +748,7 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
             llm_chain = prompt | chat | parser
             logger.debug(f"{log_prefix} LLM chain constructed: {llm_chain}")
 
-            logger.info(f"{log_prefix} Invoking LLM. Text length: {len(raw_text)}")
+            logger.info(f"{log_prefix} Preparing to invoke LLM. Original text length: {len(raw_text)}")
             MAX_LLM_INPUT_LEN = 24000 
             text_for_llm = raw_text
             if len(raw_text) > MAX_LLM_INPUT_LEN:
@@ -716,10 +757,26 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
                 _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 입력 텍스트 일부 사용 (길이 초과)", 
                                         details={'original_len': len(raw_text), 'truncated_len': len(text_for_llm)})
             
+            logger.info(f"{log_prefix} Text length for LLM: {len(text_for_llm)}")
             logger.debug(f"{log_prefix} Text for LLM (first 500 chars): {text_for_llm[:500]}")
-            filtered_content = llm_chain.invoke({"text_content": text_for_llm})
-            logger.info(f"{log_prefix} LLM filtering complete. Output length: {len(filtered_content)}")
-            logger.debug(f"{log_prefix} Filtered content (first 500 chars): {filtered_content[:500]}")
+
+            try:
+                logger.info(f"{log_prefix} >>> Attempting llm_chain.invoke NOW...")
+                start_time_llm_invoke = time.time()
+                filtered_content = llm_chain.invoke({"text_content": text_for_llm})
+                end_time_llm_invoke = time.time()
+                duration_llm_invoke = end_time_llm_invoke - start_time_llm_invoke
+                logger.info(f"{log_prefix} <<< llm_chain.invoke completed. Duration: {duration_llm_invoke:.2f} seconds.")
+                logger.info(f"{log_prefix} LLM filtering complete. Output length: {len(filtered_content)}")
+                logger.debug(f"{log_prefix} Filtered content (first 500 chars): {filtered_content[:500]}")
+            except Exception as e_llm_invoke:
+                logger.error(f"{log_prefix} !!! EXCEPTION during llm_chain.invoke: {type(e_llm_invoke).__name__} - {str(e_llm_invoke)}", exc_info=True)
+                # 예외 발생 시, 현재 작업 및 루트 작업 상태를 실패로 업데이트하고 예외를 다시 발생시켜 Celery가 처리하도록 함.
+                # 또는 여기서 특정 오류 메시지를 포함한 결과로 바로 반환할 수도 있음.
+                # 현재는 전역 예외 처리 로직으로 넘기기 위해 raise.
+                err_details_invoke = {'error': str(e_llm_invoke), 'type': type(e_llm_invoke).__name__, 'traceback': traceback.format_exc(), 'context': 'llm_chain.invoke'}
+                _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 호출 실패", status=states.FAILURE, error_info=err_details_invoke)
+                raise # Celery가 이 태스크를 실패로 처리하고, 설정에 따라 재시도하거나 파이프라인을 중단하도록 함.
 
             if filtered_content.strip() == "추출할 채용공고 내용 없음":
                 logger.warning(f"{log_prefix} LLM reported no extractable job content.")
@@ -860,11 +917,20 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         logger.debug(f"{log_prefix} Formatted CV text (first 500 chars): {(formatted_cv_text[:500] if formatted_cv_text else 'None')}")
 
 
-        # 생성된 자기소개서 파일명 결정 (기존 파일명 활용하여 일관성 유지)
-        logs_dir = "logs"  # logs_dir 변수 정의
-        os.makedirs(logs_dir, exist_ok=True) # 디렉토리 생성 보장
-        base_filename = os.path.splitext(os.path.basename(filtered_text_file_path))[0]
-        unique_cv_fn = sanitize_filename(f"{base_filename}_cover_letter_{chain_log_id[:8]}", "txt", ensure_unique=True)
+        # 생성된 자기소개서 파일명 결정
+        logs_dir = "logs"
+        os.makedirs(logs_dir, exist_ok=True)
+
+        # 원본 URL과 chain_log_id를 기반으로 파일명 생성
+        url_for_base = original_url if isinstance(original_url, str) else "unknown_url"
+        # URL에서 기본적인 파일명 부분을 추출 (여기서는 해시나 확장자 없이)
+        temp_base_from_url = sanitize_filename(url_for_base, extension="", ensure_unique=False)
+        
+        # 자기소개서 파일용 최종 스템 구성
+        cover_letter_filename_stem = f"{temp_base_from_url}_{chain_log_id[:8]}_coverletter"
+        
+        # 최종적으로 고유한 파일명 생성 (해시 및 확장자 포함)
+        unique_cv_fn = sanitize_filename(cover_letter_filename_stem, "txt", ensure_unique=True)
         cover_letter_file_path_final = os.path.join(logs_dir, unique_cv_fn)
 
         logger.debug(f"{log_prefix} Writing final cover letter (length: {len(generated_cv_text)}) to: {cover_letter_file_path_final}")
@@ -936,7 +1002,7 @@ def process_job_posting_pipeline(self, url: str, user_prompt: Optional[str] = No
     try:
         chain_async_result = processing_chain_final.apply_async()
         logger.info(f"{log_prefix} Dispatched chain. Last task ID in chain: {chain_async_result.id}. Polling root ID: {root_task_id}")
-        logger.debug(f"{log_prefix} Chain dispatched. AsyncResult: id={chain_async_result.id}, parent_id={chain_async_result.parent.id if chain_async_result.parent else 'None'}, root_id={chain_async_result.root_id}")
+        logger.debug(f"{log_prefix} Chain dispatched. AsyncResult ID: {chain_async_result.id}, Parent ID: {chain_async_result.parent.id if chain_async_result.parent else 'None'}. Root Task ID for this pipeline run: {root_task_id}")
         logger.debug(f"{log_prefix} Returning root_task_id: {root_task_id} from process_job_posting_pipeline.")
         return root_task_id # 파이프라인의 루트 ID 반환
         
