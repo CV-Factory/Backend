@@ -1424,7 +1424,7 @@ def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str
 
 
 @celery_app.task(bind=True, name="celery_tasks.handle_pipeline_completion")
-def handle_pipeline_completion(self, result_or_request_obj, *, root_task_id: str, is_success: bool):
+def handle_pipeline_completion(self, result_or_request_obj, root_task_id: str, is_success: bool):
     # `result_or_request_obj`는 성공 시 이전 태스크의 결과, 실패 시 Request 객체 (오류 정보를 포함)일 수 있습니다.
     # `is_success`와 `root_task_id`는 .s()를 통해 전달받은 추가 인자입니다.
     
