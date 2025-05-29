@@ -18,6 +18,7 @@ import traceback
 import uuid
 from celery_app import celery_app
 from celery import states
+from enum import Enum
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -164,6 +165,26 @@ async def log_displayed_cv_from_frontend(request: LogDisplayedCvRequest):
         # 500 대신 로깅 성공 여부와 관계없이 200을 반환하거나, 별도의 상태 코드를 사용할 수 있습니다.
         # 여기서는 간단히 500을 발생시키겠습니다.
         raise HTTPException(status_code=500, detail=f"Error logging displayed CV content: {str(e)}")
+
+@app.post("/log-displayed-cv", status_code=200)
+async def log_displayed_cv_endpoint(
+    request: LogDisplayedCvRequest,
+    background_tasks: BackgroundTasks,
+    request_data: Request = None  # Client IP 로깅을 위해 추가
+):
+    """
+    클라이언트에서 실제로 표시된 자기소개서 텍스트를 로깅합니다.
+    """
+    client_ip = get_client_ip(request_data) if request_data else "Unknown"
+    log_id = uuid.uuid4()
+    
+    # 실제 로깅 로직은 background task로 실행하여 응답 시간을 줄일 수 있습니다.
+    # 여기서는 간단히 로그만 남깁니다.
+    logger.info(f"[LogDisplayedCV / {log_id} / IP: {client_ip}] Received displayed CV text. Length: {len(request.displayed_text)}")
+    
+    # 필요하다면 background_tasks.add_task(save_to_db_or_file, request.displayed_text, log_id, client_ip) 등을 사용할 수 있습니다.
+    # 지금은 단순히 성공 메시지만 반환합니다.
+    return {"message": "Displayed CV text logged successfully.", "log_id": str(log_id)}
 
 @app.post("/", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
 async def start_task(job_posting_url: str = Form(...), user_prompt: Optional[str] = Form(None)):
