@@ -85,10 +85,10 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
                 
                 logger.info(f"{log_prefix} Navigating to URL: {url}")
                 # 페이지 이동 중 상태 업데이트 (진행률 20%)
-                self.update_state(state='PROGRESS', meta={'current_step': f'채용공고 페이지({url})에 접속하고 있습니다...', 'percentage': 20, 'current_task_id': str(task_id), 'pipeline_step': 'EXTRACT_HTML_PAGE_NAVIGATING'})
+                self.update_state(state='PROGRESS', meta={'current_step': '채용공고 페이지에 접속하고 있습니다...', 'percentage': 20, 'current_task_id': str(task_id), 'pipeline_step': 'EXTRACT_HTML_PAGE_NAVIGATING'})
                 _update_root_task_state(
                     root_task_id=chain_log_id, state=states.STARTED,
-                    meta={'current_step': f'채용공고 페이지에 접속하고 있습니다: {url}', 'pipeline_step': 'EXTRACT_HTML_PAGE_NAVIGATING', 'percentage': 22}
+                    meta={'current_step': '채용공고 페이지에 접속하고 있습니다...', 'pipeline_step': 'EXTRACT_HTML_PAGE_NAVIGATING', 'percentage': 22}
                 )
                 page.goto(url, wait_until="domcontentloaded")
                 logger.info(f"{log_prefix} Successfully navigated to URL. Current page URL: {page.url}")
