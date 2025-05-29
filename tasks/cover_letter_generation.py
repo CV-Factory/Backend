@@ -59,7 +59,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         logger.info(f"{log_prefix} Starting cover letter generation. Filtered text length: {len(filtered_content)}, User prompt: {'Yes' if user_prompt_text else 'No'}. Associated filtered_text_file_path for logging: {filtered_text_file_path}")
         _update_root_task_state(
             root_task_id=root_task_id, 
-            state=states.PROGRESS,
+            state=states.STARTED,
             meta={
                 'current_step': '맞춤형 자기소개서 생성을 시작합니다...',
                 'status_message': "(4_generate_cover_letter) 자기소개서 생성 시작", 
@@ -98,7 +98,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         logger.info(f"{log_prefix} 자기소개서 생성 성공 (길이: {len(cover_letter_text)}) ")
         _update_root_task_state(
             root_task_id=root_task_id,
-            state=states.PROGRESS,
+            state=states.STARTED,
             meta={
                 'current_step': '자기소개서 초안이 완성되었습니다. 최종 검토 및 저장을 진행합니다...',
                 'status_message': "(4_generate_cover_letter) LLM 생성 완료, 저장 준비 중",
