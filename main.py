@@ -287,17 +287,16 @@ async def get_task_status_internal(task_id: str, celery_app_instance_param): # c
             logger.info(f"{log_prefix} raw_meta 타입: {type(raw_meta)}, 값: {try_format_log(raw_meta)}")
             
             if isinstance(raw_meta, dict):
-                # pipeline_callbacks.py에서 'cover_letter_output' 키로 저장했으므로 해당 키로 추출 시도
-                extracted_text = raw_meta.get('cover_letter_output')
+                # step_4_generate_cover_letter의 반환값에서 'cover_letter_text' 키로 직접 추출 시도
+                extracted_text = raw_meta.get('cover_letter_text') # 'cover_letter_output' -> 'cover_letter_text'
                 if isinstance(extracted_text, str):
                     result_data = extracted_text
-                    logger.info(f"{log_prefix} SUCCESS. 'cover_letter_output'에서 문자열 결과 추출: {try_format_log(result_data)}")
+                    logger.info(f"{log_prefix} SUCCESS. 'cover_letter_text'에서 문자열 결과 추출: {try_format_log(result_data)}")
                 else:
-                    # 'cover_letter_output' 키가 없거나, 있어도 문자열이 아닌 경우
-                    result_data = raw_meta # 일단 전체 메타를 보내고 프론트엔드에서 다시 확인
-                    logger.warning(f"{log_prefix} SUCCESS이지만 'cover_letter_output'에서 문자열 추출 실패. Type: {type(extracted_text)}. 전체 raw_meta 반환: {try_format_log(result_data)}")
+                    # 'cover_letter_text' 키가 없거나, 있어도 문자열이 아닌 경우
+                    result_data = raw_meta 
+                    logger.warning(f"{log_prefix} SUCCESS이지만 'cover_letter_text'에서 문자열 추출 실패. Type: {type(extracted_text)}. 전체 raw_meta 반환: {try_format_log(result_data)}")
             elif isinstance(raw_meta, str):
-                # 만약 raw_meta가 이미 문자열이라면 (이전 로직의 fallback 또는 예외적 상황)
                 result_data = raw_meta
                 logger.info(f"{log_prefix} SUCCESS. raw_meta가 이미 문자열임: {try_format_log(result_data)}")
             else:
