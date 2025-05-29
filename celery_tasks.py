@@ -58,6 +58,28 @@ LOCATOR_DEFAULT_TIMEOUT = 5000
 GET_ATTRIBUTE_TIMEOUT = 10000
 EVALUATE_TIMEOUT_SHORT = 10000
 
+def try_format_log(data: Any, max_len: int = 250) -> str:
+    """로깅을 위해 데이터를 안전하게 문자열로 변환하고, 너무 길면 축약합니다."""
+    try:
+        if isinstance(data, dict):
+            # 딕셔너리의 경우, 각 값에 대해 재귀적으로 처리하거나, 특정 키(예: 'page_content')를 제외하고 축약
+            # 여기서는 간단히 문자열로 변환 후 축약
+            s_data = str({k: (v[:max_len // len(data.keys())] + '...' if isinstance(v, str) and len(v) > max_len // len(data.keys()) else v) for k, v in data.items()})
+        elif isinstance(data, str):
+            s_data = data
+        elif isinstance(data, list):
+            # 리스트의 각 아이템을 문자열로 변환하여 합치되, 전체 길이가 max_len을 넘지 않도록 조절
+            # 간단하게는 str(list) 후 축약
+            s_data = str(data)
+        else:
+            s_data = repr(data)
+
+        if len(s_data) > max_len:
+            return s_data[:max_len] + f"... (truncated, original_len={len(s_data)})"
+        return s_data
+    except Exception as e:
+        return f"[Error formatting log data: {e}]"
+
 def sanitize_filename(url_or_name: str, extension: str = "", ensure_unique: bool = False) -> str:
     """URL 또는 임의의 문자열을 기반으로 안전하고 유효한 파일 이름을 생성합니다."""
     try:
@@ -104,22 +126,16 @@ def _update_root_task_state(root_task_id: str, state: str, meta: Optional[Dict[s
         current_meta = meta if meta is not None else {}
         
         # 기존 메타 정보 가져오기 시도 (덮어쓰기 방지 및 병합 위함)
-        # 참고: 이 방식은 backend.get_result_meta() 와 같은 것이 있다면 더 좋을 수 있음
-        # 현재 AsyncResult().info 를 사용하면 이전 meta를 가져올 수 있음
         try:
-            # 전역 celery_app 사용
             existing_task_result = AsyncResult(root_task_id, app=celery_app)
             existing_meta = existing_task_result.info if isinstance(existing_task_result.info, dict) else {}
             if existing_meta:
-                # logger.debug(f"{log_prefix} 기존 메타 정보 발견: {try_format_log(existing_meta)}")
-                # 새로운 메타로 기존 메타를 업데이트 (새로운 정보 우선)
                 merged_meta = {**existing_meta, **current_meta}
                 current_meta = merged_meta
             # else:
                 # logger.debug(f"{log_prefix} 기존 메타 정보 없음 또는 유효하지 않음.")
         except Exception as e_meta:
             logger.warning(f"{log_prefix} 기존 메타 정보 로드 중 오류: {e_meta}", exc_info=True)
-            # 오류 발생 시에도 전달된 current_meta로 계속 진행
 
         # 최종적으로 저장될 메타 정보 로깅
         # logger.info(f"{log_prefix} 최종 저장될 메타: {try_format_log(current_meta)}")
