@@ -37,8 +37,8 @@ try:
 except Exception as e_dotenv:
     logger.error(f"Error loading .env file: {e_dotenv}", exc_info=True)
 
-# 새로 생성된 유틸리티 모듈 임포트
-from .playwright_utils import (_get_playwright_page_content_with_iframes_processed,
+# 유틸리티 모듈 임포트 경로 수정
+from .utils.playwright_utils import (_get_playwright_page_content_with_iframes_processed,
                                _flatten_iframes_in_live_dom_sync,
                                MAX_IFRAME_DEPTH,
                                IFRAME_LOAD_TIMEOUT,
@@ -48,8 +48,8 @@ from .playwright_utils import (_get_playwright_page_content_with_iframes_process
                                LOCATOR_DEFAULT_TIMEOUT,
                                GET_ATTRIBUTE_TIMEOUT,
                                EVALUATE_TIMEOUT_SHORT)
-from .file_utils import sanitize_filename, try_format_log, MAX_FILENAME_LENGTH
-from .celery_utils import _update_root_task_state, get_detailed_error_info
+from .utils.file_utils import sanitize_filename, try_format_log, MAX_FILENAME_LENGTH
+from .utils.celery_utils import _update_root_task_state, get_detailed_error_info
 
 
 # ======================================================================================
