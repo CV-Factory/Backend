@@ -6,26 +6,54 @@ import ssl
 logger = logging.getLogger(__name__)
 
 # Upstash Redis 연결 정보 환경 변수
-UPSTASH_REDIS_ENDPOINT = os.environ.get('UPSTASH_REDIS_ENDPOINT', 'gusc1-inviting-kit-31726.upstash.io')
-UPSTASH_REDIS_PORT = os.environ.get('UPSTASH_REDIS_PORT', '31726')
-UPSTASH_REDIS_PASSWORD = os.environ.get('UPSTASH_REDIS_PASSWORD') # 실제 비밀번호는 Secret Manager 또는 환경변수로 주입
+UPSTASH_REDIS_ENDPOINT = os.environ.get('UPSTASH_REDIS_ENDPOINT')
+UPSTASH_REDIS_PORT = os.environ.get('UPSTASH_REDIS_PORT')
+UPSTASH_REDIS_PASSWORD = os.environ.get('UPSTASH_REDIS_PASSWORD')
 
 # 로컬 테스트 시 REDIS_URL 환경 변수 또는 직접 Upstash 정보 사용 가능
-# 예: REDIS_URL = "rediss://default:YOUR_PASSWORD@YOUR_UPSTASH_ENDPOINT:YOUR_UPSTASH_PORT"
-LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
+LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0') # 기본 로컬 Redis
 
+# FINAL_REDIS_URL 결정 로직
 if UPSTASH_REDIS_PASSWORD and UPSTASH_REDIS_ENDPOINT and UPSTASH_REDIS_PORT:
     # Cloud Run 환경 또는 Upstash 정보가 모두 제공된 경우
-    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}?ssl_cert_reqs=none"
-    logger.info("Using Upstash Redis for Celery with ssl_cert_reqs=none.")
-else:
-    # 로컬 환경 또는 Upstash 정보가 불완전한 경우 (기존 로컬 Redis 또는 REDIS_URL 사용)
-    FINAL_REDIS_URL = LOCAL_REDIS_URL
-    logger.info("Using local Redis or REDIS_URL for Celery.")
-    if not UPSTASH_REDIS_PASSWORD:
-        logger.warning("UPSTASH_REDIS_PASSWORD not set. Falling back to local Redis or REDIS_URL.")
+    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}"
+    # ssl_cert_reqs는 broker_transport_options 와 result_backend_transport_options 에서 설정
+    logger.info(f"Using Upstash Redis for Celery. Endpoint: {UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}")
+    
+    # Celery 5.x 이상에서는 transport_options 사용 권장
+    CELERY_BROKER_TRANSPORT_OPTIONS = {'ssl_cert_reqs': ssl.CERT_NONE}
+    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {'ssl_cert_reqs': ssl.CERT_NONE}
+    
+elif LOCAL_REDIS_URL.startswith("rediss://"):
+    # REDIS_URL이 rediss:// 스킴을 사용하는 경우 (예: 다른 Upstash 인스턴스 또는 외부 SSL Redis)
+    if "ssl_cert_reqs" not in LOCAL_REDIS_URL:
+        separator = '&' if '?' in LOCAL_REDIS_URL else '?'
+        FINAL_REDIS_URL = f"{LOCAL_REDIS_URL}{separator}ssl_cert_reqs=none"
+        logger.info(f"Using REDIS_URL (rediss://) with ssl_cert_reqs=none appended: {FINAL_REDIS_URL.split('@')[0]}@...")
+    else:
+        FINAL_REDIS_URL = LOCAL_REDIS_URL
+        logger.info(f"Using REDIS_URL (rediss://) with existing ssl_cert_reqs: {FINAL_REDIS_URL.split('@')[0]}@...")
+    # 이 경우에도 transport_options 사용 가능
+    CELERY_BROKER_TRANSPORT_OPTIONS = {'ssl_cert_reqs': ssl.CERT_NONE} # 또는 URL에서 파싱
+    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {'ssl_cert_reqs': ssl.CERT_NONE} # 또는 URL에서 파싱
 
-logger.info(f"Celery: FINAL_REDIS_URL (host and port only for logging): {'rediss://' + UPSTASH_REDIS_ENDPOINT + ':' + UPSTASH_REDIS_PORT if UPSTASH_REDIS_PASSWORD else FINAL_REDIS_URL.split('@')[-1]}")
+else:
+    # 로컬 Redis (redis://) 또는 Upstash 정보가 불완전하여 로컬로 폴백
+    FINAL_REDIS_URL = LOCAL_REDIS_URL
+    logger.info(f"Using local Redis (redis://) or incomplete Upstash config, falling back to: {FINAL_REDIS_URL}")
+    if not UPSTASH_REDIS_PASSWORD and (UPSTASH_REDIS_ENDPOINT or UPSTASH_REDIS_PORT): # 부분적으로만 설정된 경우 경고
+        logger.warning("Upstash Redis configuration is incomplete (e.g., missing password). Ensure all UPSTASH_REDIS_... variables are set for Upstash, or REDIS_URL for other Redis instances.")
+    CELERY_BROKER_TRANSPORT_OPTIONS = {}
+    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {}
+
+
+# 비밀번호를 제외한 URL 로깅
+log_url = FINAL_REDIS_URL
+if "@" in log_url:
+    log_url = f"{log_url.split('://')[0]}://{log_url.split('@')[-1]}"
+logger.info(f"Celery: Effective broker/backend URL for Celery (credentials masked): {log_url}")
+logger.info(f"Celery: BROKER_TRANSPORT_OPTIONS: {CELERY_BROKER_TRANSPORT_OPTIONS}")
+logger.info(f"Celery: RESULT_BACKEND_TRANSPORT_OPTIONS: {CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS}")
 
 
 try:
@@ -34,9 +62,17 @@ try:
         broker=FINAL_REDIS_URL,
         backend=FINAL_REDIS_URL,
         include=['celery_tasks'],
-        broker_connection_retry_on_startup=True # GCP Cloud Run 환경에서 시작시 네트워크 연결 재시도
+        broker_connection_retry_on_startup=True
     )
-    logger.info("Celery app instance created successfully.")
+    
+    # transport_options 설정 (Celery 5.x 이상)
+    if CELERY_BROKER_TRANSPORT_OPTIONS:
+        celery_app.conf.broker_transport_options = CELERY_BROKER_TRANSPORT_OPTIONS
+    if CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS:
+        celery_app.conf.result_backend_transport_options = CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS
+        
+    logger.info("Celery app instance created and transport options configured.")
+
 except Exception as e:
     logger.error(f"Error creating Celery app instance: {e}", exc_info=True)
     raise
