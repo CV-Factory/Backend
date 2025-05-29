@@ -381,27 +381,25 @@ async def stream_task_status(request: Request, task_id: str = Path(..., descript
         last_event_data_json = None # 마지막으로 보낸 데이터 저장
         consecutive_same_data_count = 0
 
-        logger.info(f"[SSE / {task_id_str}] Event generator started. Max wait: {MAX_WAIT_TIME_SECONDS}s, Interval: {POLLING_INTERVAL_SECONDS}s")
+        logger.info(f"[SSE / {task_id_str} / Client {client_ip}] Event generator started. Max wait: {MAX_WAIT_TIME_SECONDS}s, Interval: {POLLING_INTERVAL_SECONDS}s")
         try:
             while True:
                 if await request.is_disconnected():
-                    logger.info(f"[SSE / {task_id_str}] Client disconnected.")
+                    logger.info(f"[SSE / {task_id_str} / Client {client_ip}] Client disconnected.")
                     break
 
-                # 작업 결과 가져오기 (celery_app을 직접 사용)
+                logger.debug(f"[SSE / {task_id_str} / Client {client_ip}] Polling for task status...")
                 task_result = AsyncResult(task_id_str, app=celery_app)
                 current_status = task_result.status
-                result_info = task_result.info # 메타데이터 또는 결과
+                result_info = task_result.info
+                logger.debug(f"[SSE / {task_id_str} / Client {client_ip}] Raw Task Status: {current_status}, Raw Info: {try_format_log(result_info)}")
 
-                # current_step과 percentage 기본값 설정
                 current_step_message = "상태 확인 중..."
                 percentage_value = None
 
                 if isinstance(result_info, dict):
-                    current_step_message = result_info.get('current_step', current_step_message) # 작업의 current_step 사용
-                    percentage_value = result_info.get('percentage') # 작업의 percentage 사용
-                    # 만약 result_info가 최종 결과(예: 자기소개서 텍스트)를 직접 포함하고, current_step이 없다면,
-                    # 상태에 따라 적절한 메시지를 설정할 수 있습니다.
+                    current_step_message = result_info.get('current_step', current_step_message)
+                    percentage_value = result_info.get('percentage')
                     if current_status == states.SUCCESS and 'cover_letter_output' in result_info and not result_info.get('current_step'):
                         current_step_message = result_info.get('status_message', "자기소개서 생성 완료!")
                         percentage_value = 100
@@ -413,64 +411,63 @@ async def stream_task_status(request: Request, task_id: str = Path(..., descript
                     current_step_message = "작업 완료"
                     percentage_value = 100
                 
-                # 최종적으로 클라이언트에 전달할 데이터 구성
                 event_data = {
                     "task_id": task_id_str,
                     "status": current_status,
                     "current_step": current_step_message,
                     "percentage": percentage_value,
-                    "result": result_info if current_status == states.SUCCESS or current_status == states.FAILURE else None # 성공/실패 시에만 결과 포함
+                    "result": result_info if current_status == states.SUCCESS or current_status == states.FAILURE else None
                 }
                 event_data_json = json.dumps(event_data)
 
-                # 이전 데이터와 동일하면 보내지 않음 (무한 루프 방지 및 효율성)
                 if event_data_json == last_event_data_json:
                     consecutive_same_data_count += 1
-                    if consecutive_same_data_count >= 5: # 예를 들어 5번 연속 동일하면 로그 남기고 잠시 대기 길게
-                        logger.debug(f"[SSE / {task_id_str}] Data unchanged for {consecutive_same_data_count} polls. Status: {current_status}, Step: {current_step_message}")
-                        # consecutive_same_data_count = 0 # 초기화하거나, 더 긴 주기로 체크하도록 조정
+                    if consecutive_same_data_count % 10 == 0: # 10번 (약 7초) 마다 한 번씩 로그
+                        logger.debug(f"[SSE / {task_id_str} / Client {client_ip}] Data unchanged for {consecutive_same_data_count} polls. Status: {current_status}, Step: {current_step_message}")
                 else:
-                    logger.info(f"[SSE / {task_id_str}] Sending data: Status={current_status}, Step='{current_step_message}', Percent={percentage_value}")
+                    logger.info(f"[SSE / {task_id_str} / Client {client_ip}] Yielding data: {try_format_log(event_data_json)}")
                     yield f"data: {event_data_json}\n\n"
+                    logger.debug(f"[SSE / {task_id_str} / Client {client_ip}] Successfully yielded data.")
                     last_event_data_json = event_data_json
                     consecutive_same_data_count = 0
 
-                # 터미널 상태이면 루프 종료
                 if current_status in states.READY_STATES:
-                    logger.info(f"[SSE / {task_id_str}] Task reached terminal state: {current_status}. Result info: {try_format_log(result_info)}")
-                    # 최종 상태 한 번 더 전송 (만약 위에서 보내지 않았다면)
-                    if event_data_json != last_event_data_json: 
+                    logger.info(f"[SSE / {task_id_str} / Client {client_ip}] Task reached terminal state: {current_status}. Final Info: {try_format_log(result_info)}")
+                    if event_data_json != last_event_data_json:
+                         logger.info(f"[SSE / {task_id_str} / Client {client_ip}] Yielding final data: {try_format_log(event_data_json)}")
                          yield f"data: {event_data_json}\n\n"
+                         logger.debug(f"[SSE / {task_id_str} / Client {client_ip}] Successfully yielded final data.")
                     break
 
-                # 최대 대기 시간 초과 확인
                 elapsed_time = time.time() - request_received_time
                 if elapsed_time > MAX_WAIT_TIME_SECONDS:
-                    logger.warning(f"[SSE / {task_id_str}] Max wait time ({MAX_WAIT_TIME_SECONDS}s) exceeded. Closing stream.")
-                    yield f"data: {json.dumps({'task_id': task_id_str, 'status': 'TIMEOUT', 'current_step': '서버 연결 시간 초과'})}\n\n"
+                    logger.warning(f"[SSE / {task_id_str} / Client {client_ip}] Max wait time ({MAX_WAIT_TIME_SECONDS}s) exceeded. Closing stream.")
+                    timeout_event_data = {'task_id': task_id_str, 'status': 'TIMEOUT', 'current_step': '서버 연결 시간 초과'}
+                    logger.info(f"[SSE / {task_id_str} / Client {client_ip}] Yielding timeout data: {timeout_event_data}")
+                    yield f"data: {json.dumps(timeout_event_data)}\n\n"
+                    logger.debug(f"[SSE / {task_id_str} / Client {client_ip}] Successfully yielded timeout data.")
                     break
                 
                 await asyncio.sleep(POLLING_INTERVAL_SECONDS)
         
         except asyncio.CancelledError:
-            logger.info(f"[SSE / {task_id_str}] Stream cancelled by client or server shutdown.")
-            # yield f"data: {json.dumps({'task_id': task_id_str, 'status': 'CANCELLED', 'current_step': '연결이 중단되었습니다.'})}\n\n"
+            logger.info(f"[SSE / {task_id_str} / Client {client_ip}] Stream cancelled by client or server shutdown.")
         except Exception as e_stream:
-            logger.error(f"[SSE / {task_id_str}] Error in event generator: {e_stream}", exc_info=True)
+            logger.error(f"[SSE / {task_id_str} / Client {client_ip}] Error in event generator: {e_stream}", exc_info=True)
             try:
-                # 클라이언트에 에러 알림 시도
                 error_event = {
                     "task_id": task_id_str,
                     "status": "STREAM_ERROR",
                     "current_step": "오류: 실시간 업데이트 중 문제가 발생했습니다.",
                     "error": str(e_stream)
                 }
+                logger.info(f"[SSE / {task_id_str} / Client {client_ip}] Yielding stream error data: {error_event}")
                 yield f"data: {json.dumps(error_event)}\n\n"
+                logger.debug(f"[SSE / {task_id_str} / Client {client_ip}] Successfully yielded stream error data.")
             except Exception as e_yield_err:
-                logger.error(f"[SSE / {task_id_str}] Failed to yield error to client: {e_yield_err}", exc_info=True)
+                logger.error(f"[SSE / {task_id_str} / Client {client_ip}] Failed to yield error to client: {e_yield_err}", exc_info=True)
         finally:
-            logger.info(f"[SSE / {task_id_str}] Event generator finished.")
-            # StreamResponse는 자동으로 닫히지만, 추가 정리 작업이 있다면 여기에 명시
+            logger.info(f"[SSE / {task_id_str} / Client {client_ip}] Event generator finished.")
 
     return StreamingResponse(event_generator_for_route(task_id), media_type="text/event-stream")
 
