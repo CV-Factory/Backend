@@ -1,7 +1,9 @@
 import sys
+import os
+print(f"Current Working Directory: {os.getcwd()}")
+print(f"sys.path: {sys.path}")
 sys.path.insert(0, "/app") # 모듈 검색 경로에 /app 추가
 
-import os
 import logging
 import importlib.util # importlib.util 추가
 import json # SSE를 위해 추가

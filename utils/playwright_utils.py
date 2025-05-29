@@ -8,6 +8,8 @@ from typing import Union # 추가
 # 로거 설정
 logger = logging.getLogger(__name__)
 
+DEFAULT_PAGE_TIMEOUT = 60000 # 페이지 기본 타임아웃 (밀리초)
+PAGE_NAVIGATION_TIMEOUT = 60000 # 페이지 네비게이션 타임아웃 (밀리초)
 # 상수 정의 (celery_tasks.py에서 이동)
 MAX_IFRAME_DEPTH = 1
 IFRAME_LOAD_TIMEOUT = 30000  # 밀리초

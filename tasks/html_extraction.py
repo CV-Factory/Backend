@@ -7,10 +7,10 @@ import uuid
 import traceback
 from celery.exceptions import MaxRetriesExceededError, Reject
 from celery import states
-from ..utils.playwright_utils import (_get_playwright_page_content_with_iframes_processed,
+from utils.playwright_utils import (_get_playwright_page_content_with_iframes_processed,
                                DEFAULT_PAGE_TIMEOUT, PAGE_NAVIGATION_TIMEOUT)
-from ..utils.file_utils import sanitize_filename, try_format_log
-from ..utils.celery_utils import _update_root_task_state
+from utils.file_utils import sanitize_filename, try_format_log
+from utils.celery_utils import _update_root_task_state
 
 logger = logging.getLogger(__name__)
 

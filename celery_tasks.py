@@ -4,11 +4,11 @@ import uuid
 from dotenv import load_dotenv
 from celery import chain, signature, states
 
-from .tasks.html_extraction import step_1_extract_html
-from .tasks.text_extraction import step_2_extract_text
-from .tasks.content_filtering import step_3_filter_content
-from .tasks.cover_letter_generation import step_4_generate_cover_letter
-from .tasks.pipeline_callbacks import handle_pipeline_completion
+from tasks.html_extraction import step_1_extract_html
+from tasks.text_extraction import step_2_extract_text
+from tasks.content_filtering import step_3_filter_content
+from tasks.cover_letter_generation import step_4_generate_cover_letter
+from tasks.pipeline_callbacks import handle_pipeline_completion
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logging.getLogger("httpcore").setLevel(logging.WARNING)

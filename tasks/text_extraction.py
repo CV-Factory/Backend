@@ -6,8 +6,8 @@ from bs4 import BeautifulSoup, Comment
 import traceback
 from celery import states
 from typing import Dict
-from ..utils.file_utils import sanitize_filename
-from ..utils.celery_utils import _update_root_task_state
+from utils.file_utils import sanitize_filename
+from utils.celery_utils import _update_root_task_state
 
 logger = logging.getLogger(__name__)
 

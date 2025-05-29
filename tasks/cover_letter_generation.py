@@ -6,9 +6,9 @@ from celery.exceptions import MaxRetriesExceededError, Reject
 from celery import states
 from typing import Dict, Any, Optional
 
-from ..utils.file_utils import sanitize_filename, try_format_log # try_format_log는 celery_tasks.py에서 사용하던 것이므로 여기선 불필요 할 수 있음
-from ..utils.celery_utils import _update_root_task_state, get_detailed_error_info
-from ...generate_cover_letter_semantic import generate_cover_letter # 경로 수정
+from utils.file_utils import sanitize_filename, try_format_log # ../utils.file_utils -> utils.file_utils
+from utils.celery_utils import _update_root_task_state, get_detailed_error_info
+from generate_cover_letter_semantic import generate_cover_letter # ...generate_cover_letter_semantic -> generate_cover_letter_semantic
 
 logger = logging.getLogger(__name__)
 
