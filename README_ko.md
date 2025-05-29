@@ -138,17 +138,22 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
 ├── main.py           # FastAPI 애플리케이션 진입점 및 API 엔드포인트
 ├── celery_app.py     # Celery 애플리케이션 인스턴스 설정
 ├── celery_tasks.py   # Celery 백그라운드 작업 정의 (웹 스크레이핑, 파싱, 포맷팅 등)
-├── Dockerfile        # 웹 및 워커 서비스를 위한 Docker 이미지 정의 (의존성, Supervisor, Playwright 설정 포함; 로컬 Redis 서버 설치 제거됨)
-├── docker-compose.yml# 로컬 개발을 위한 멀티 컨테이너 Docker 애플리케이션 정의 및 설정 (web, worker 서비스; 로컬 Redis 서비스 정의 제거됨)
-├── requirements.txt  # 프로젝트에 필요한 Python 의존성 목록
-├── entrypoint.sh     # Docker 컨테이너 내부에서 Supervisor를 통해 서비스(FastAPI, Celery)를 시작하는 스크립트
-├── supervisord.conf  # FastAPI(Uvicorn) 및 Celery 워커 프로세스를 관리하는 Supervisor 설정 파일 (Redis 서버 프로그램 제거됨)
-├── cloudbuild.yaml   # CI/CD를 위한 Google Cloud Build 설정 파일
 ├── generate_cover_letter_semantic.py # RAG 및 Groq API를 사용하여 자기소개서를 생성하는 스크립트
-├── logs/             # 로컬 애플리케이션 로그 및 생성된 파일 디렉토리 (로컬 Docker Compose 설정에서 볼륨으로 마운트됨). Cloud Run에서는 로그가 Cloud Logging으로 전송됩니다.
+├── Dockerfile        # 웹 및 워커 서비스를 위한 Docker 이미지 정의
+├── docker-compose.yml# 로컬 개발을 위한 멀티 컨테이너 Docker 애플리케이션 정의 및 설정
+├── requirements.txt  # 프로젝트에 필요한 Python 의존성 목록
+├── entrypoint.sh     # Docker 컨테이너 내부에서 Supervisor를 통해 서비스를 시작하는 스크립트
+├── supervisord.conf  # FastAPI(Uvicorn) 및 Celery 워커 프로세스를 관리하는 Supervisor 설정 파일
+├── cloudbuild.yaml   # CI/CD를 위한 Google Cloud Build 설정 파일
+├── request_body.json # API 요청을 위한 예시 JSON 페이로드
+├── .gitignore        # Git이 무시해야 하는, 의도적으로 추적하지 않는 파일을 지정
 ├── LICENSE           # 라이선스 파일 (CC BY NC 4.0)
 ├── README.md         # 영문 README 파일
 ├── README_ko.md      # 한글 README 파일 (현재 파일)
+├── core/             # 애플리케이션의 핵심 유틸리티 및 설정
+├── tasks/            # 특정 Celery 작업 관련 모듈 (더 복잡한 작업 로직이 분리된 경우)
+├── utils/            # 일반 유틸리티 함수 및 헬퍼 스크립트
+├── logs/             # 로컬 애플리케이션 로그 및 생성된 파일 디렉토리. Cloud Run에서는 로그가 Cloud Logging으로 전송됩니다.
 ```
 
 ## 📄 라이선스

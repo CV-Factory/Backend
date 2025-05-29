@@ -146,17 +146,22 @@ This project uses Google Cloud Build for its CI/CD pipeline.
 ├── main.py           # FastAPI application entry point and API endpoints
 ├── celery_app.py     # Celery application instance configuration
 ├── celery_tasks.py   # Definitions of Celery background tasks (web scraping, parsing, formatting, etc.)
-├── Dockerfile        # Defines the Docker image for web and worker services (includes dependencies, Supervisor, and Playwright setup; local Redis server installation removed)
-├── docker-compose.yml# Defines and configures the multi-container Docker application for local development (web, worker services; local Redis service definition removed)
-├── requirements.txt  # Lists Python dependencies required by the project
-├── entrypoint.sh     # Script executed inside the Docker container to start services (FastAPI, Celery) via Supervisor.
-├── supervisord.conf  # Supervisor configuration file to manage FastAPI (Uvicorn) and Celery worker processes (Redis server program removed).
-├── cloudbuild.yaml   # Google Cloud Build configuration file for CI/CD.
 ├── generate_cover_letter_semantic.py # Script for generating cover letters using RAG and Groq API
-├── logs/             # Directory for local application logs and generated files (mounted as a volume in local Docker Compose setup). In Cloud Run, logs are directed to Cloud Logging.
+├── Dockerfile        # Defines the Docker image for web and worker services
+├── docker-compose.yml# Defines and configures the multi-container Docker application for local development
+├── requirements.txt  # Lists Python dependencies required by the project
+├── entrypoint.sh     # Script executed inside the Docker container to start services via Supervisor
+├── supervisord.conf  # Supervisor configuration file to manage FastAPI (Uvicorn) and Celery worker processes
+├── cloudbuild.yaml   # Google Cloud Build configuration file for CI/CD
+├── request_body.json # Example JSON payload for API requests
+├── .gitignore        # Specifies intentionally untracked files that Git should ignore
 ├── LICENSE           # License file (CC BY NC 4.0)
 ├── README.md         # English README file (This file)
 ├── README_ko.md      # Korean README file
+├── core/             # Core utilities and configurations for the application
+├── tasks/            # Modules related to specific Celery tasks (if more complex task logic is separated)
+├── utils/            # General utility functions and helper scripts
+├── logs/             # Directory for local application logs and generated files. In Cloud Run, logs are directed to Cloud Logging.
 ```
 
 ## 📄 License
