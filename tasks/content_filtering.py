@@ -56,8 +56,13 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
     logger.info(f"{log_prefix} Starting LLM filtering for text (length: {len(extracted_text)}). Associated raw_text_file_path for logging: {raw_text_file_path}")
     _update_root_task_state(
         root_task_id=chain_log_id, 
-        state=states.STARTED,
-        meta={'status_message': f"({step_log_id}) LLM 채용공고 필터링 시작", 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_STARTED'}
+        state=states.PROGRESS,
+        meta={
+            'current_step': '추출된 텍스트에서 핵심 채용공고 내용을 선별하고 있습니다...',
+            'status_message': f"({step_log_id}) LLM 채용공고 필터링 시작", 
+            'current_task_id': task_id, 
+            'pipeline_step': 'CONTENT_FILTERING_STARTED'
+        }
     )
 
     filtered_text_file_path = None
@@ -103,8 +108,9 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
                 text_for_llm = raw_text[:MAX_LLM_INPUT_LEN]
                 _update_root_task_state(
                     root_task_id=chain_log_id, 
-                    state=states.STARTED,
+                    state=states.PROGRESS,
                     meta={
+                        'current_step': '채용공고 내용이 너무 길어 일부만 사용하여 분석합니다...',
                         'status_message': f"({step_log_id}) LLM 입력 텍스트 일부 사용 (길이 초과)", 
                         'original_len': len(raw_text), 
                         'truncated_len': len(text_for_llm),
@@ -152,8 +158,9 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
         logger.info(f"{log_prefix} Filtered text saved to: {filtered_text_file_path}")
         _update_root_task_state(
             root_task_id=chain_log_id,
-            state=states.STARTED,
+            state=states.PROGRESS,
             meta={
+                'current_step': '핵심 채용공고 내용 선별 완료. 자기소개서 생성을 준비합니다...',
                 'status_message': f"({step_log_id}) 필터링된 텍스트 파일 저장 완료", 
                 'filtered_text_file_path': filtered_text_file_path, 
                 'current_task_id': task_id, 
@@ -187,7 +194,13 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
             state=states.FAILURE, 
             exc=e, 
             traceback_str=traceback.format_exc(), 
-            meta={'status_message': f"({step_log_id}) LLM 필터링 실패", **err_details, 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_FAILED'}
+            meta={
+                'current_step': '오류: 채용공고 내용 필터링 중 문제가 발생했습니다.',
+                'status_message': f"({step_log_id}) LLM 필터링 실패", 
+                **err_details, 
+                'current_task_id': task_id, 
+                'pipeline_step': 'CONTENT_FILTERING_FAILED'
+            }
         )
         logger.error(f"{log_prefix} Root task {chain_log_id} updated with pipeline FAILURE status.")
         raise 

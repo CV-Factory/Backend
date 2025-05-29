@@ -244,6 +244,21 @@ async def start_task(fastapi_request: Request, request_body: StartTaskRequest): 
         else:
             response_task_id = request_id
         
+        # 작업 상태를 STARTED로 즉시 업데이트하고 초기 current_step 설정
+        try:
+            # celery_app 인스턴스를 직접 사용 (get_celery_app_instance() 대신 이미 로드된 celery_app 사용)
+            celery_app.backend.store_result(
+                task_id=response_task_id, 
+                result=None, 
+                status="STARTED", 
+                meta={'current_step': '자기소개서 생성 파이프라인 시작 중...'}
+            )
+            logger.info(f"[ReqID: {request_id}] Manually set task {response_task_id} status to STARTED with initial step.")
+        except Exception as e_store_result:
+            logger.error(f"[ReqID: {request_id}] Failed to manually set initial task status for {response_task_id}: {e_store_result}", exc_info=True)
+            # 이 오류가 발생해도 작업 자체는 이미 Celery에 제출되었으므로, HTTP 요청은 계속 성공으로 처리할 수 있음
+            # 다만 클라이언트는 PENDING 상태를 더 오래 보게 될 수 있음
+
         logger.info(f"[ReqID: {request_id}] Responding with task_id: {response_task_id}")
         return {"message": "자기소개서 생성 작업이 시작되었습니다.", "task_id": response_task_id}
 

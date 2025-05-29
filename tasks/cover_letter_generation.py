@@ -60,8 +60,9 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         logger.info(f"{log_prefix} Starting cover letter generation. Filtered text length: {len(filtered_content)}, User prompt: {'Yes' if user_prompt_text else 'No'}. Associated filtered_text_file_path for logging: {filtered_text_file_path}")
         _update_root_task_state(
             root_task_id=root_task_id, 
-            state=states.STARTED,
+            state=states.PROGRESS,
             meta={
+                'current_step': '맞춤형 자기소개서 생성을 시작합니다...',
                 'status_message': "(4_generate_cover_letter) 자기소개서 생성 시작", 
                 'user_prompt': bool(user_prompt_text), 
                 'current_task_id': task_id,
@@ -85,6 +86,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
                 root_task_id=root_task_id, 
                 state=states.FAILURE, 
                 meta={
+                    'current_step': '오류: 자기소개서 생성에 실패했습니다. (LLM 응답 문제)',
                     'status_message': f"(4_generate_cover_letter) 실패: LLM 생성 오류", 
                     'error': error_message_llm, 
                     'details': 'LLM returned empty, failed, or too short content for cover letter.', 
@@ -95,6 +97,16 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             raise ValueError(error_message_llm) # 구체적인 에러 메시지와 함께 ValueError 발생
 
         logger.info(f"{log_prefix} 자기소개서 생성 성공 (길이: {len(cover_letter_text)}) ")
+        _update_root_task_state(
+            root_task_id=root_task_id,
+            state=states.PROGRESS,
+            meta={
+                'current_step': '자기소개서 초안이 완성되었습니다. 최종 검토 및 저장을 진행합니다...',
+                'status_message': "(4_generate_cover_letter) LLM 생성 완료, 저장 준비 중",
+                'current_task_id': task_id,
+                'pipeline_step': 'COVER_LETTER_LLM_COMPLETED'
+            }
+        )
 
         # 파일 저장 경로 및 이름 생성 (sanitize_filename 사용)
         # base_fn = os.path.splitext(os.path.basename(filtered_text_file_path))[0].replace("_filtered_text", "") if filtered_text_file_path != 'N/A' else sanitize_filename(original_url, ensure_unique=False)
@@ -119,6 +131,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             "cover_letter_file_path": cover_letter_file_path,
             "chain_log_id": chain_log_id,
             "status_message": "자기소개서 생성 완료",
+            "current_step": "자기소개서 생성이 성공적으로 완료되었습니다!",
             "pipeline_step": "COVER_LETTER_GENERATION_COMPLETED" # 최종 단계 명시
         }
         _update_root_task_state(
@@ -138,6 +151,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             exc=e_val, 
             traceback_str=traceback.format_exc(), 
             meta={
+                'current_step': f'오류: 자기소개서 생성 중 입력값 관련 문제가 발생했습니다. ({str(e_val)})',
                 'status_message': f"(4_generate_cover_letter) 실패: {str(e_val)}", 
                 'error': str(e_val), 
                 'type': 'ValueError', 
@@ -156,6 +170,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             exc=e_max_retries, 
             traceback_str=traceback.format_exc(), 
             meta={
+                'current_step': '오류: 자기소개서 생성 재시도 한도를 초과했습니다. 잠시 후 다시 시도해주세요.',
                 'status_message': f"(4_generate_cover_letter) 실패: {error_message}", 
                 'error': error_message, 
                 'type': 'MaxRetriesExceededError', 
@@ -175,6 +190,7 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             exc=e_gen, 
             traceback_str=traceback.format_exc(), 
             meta={
+                'current_step': '오류: 자기소개서 생성 중 예기치 않은 문제가 발생했습니다. 관리자에게 문의하세요.',
                 'status_message': f"(4_generate_cover_letter) 실패: {error_message}", 
                 'error': error_message, 
                 'type': str(type(e_gen).__name__), 

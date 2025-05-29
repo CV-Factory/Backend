@@ -24,20 +24,29 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
 
     _update_root_task_state(
         root_task_id=chain_log_id,
-        state=states.STARTED,
+        state=states.PROGRESS,
         meta={
+            'current_step': '채용공고 분석 준비 중... (HTML 추출 단계 시작)',
             'status_message': f"(1_extract_html) HTML 추출 시작: {url}", 
             'current_task_id': str(task_id), 
             'url_for_step1': url,
-            'pipeline_step': 'EXTRACT_HTML_STARTED'
+            'pipeline_step': 'EXTRACT_HTML_INITIATED'
         }
     )
 
     html_file_path = ""
     try:
         logger.info(f"{log_prefix} Initializing Playwright...")
+        _update_root_task_state(
+            root_task_id=chain_log_id, state=states.PROGRESS,
+            meta={'current_step': '채용공고 페이지 분석 도구를 준비하고 있습니다...', 'pipeline_step': 'EXTRACT_HTML_PLAYWRIGHT_INIT'}
+        )
         with sync_playwright() as p:
             logger.info(f"{log_prefix} Playwright initialized. Launching browser...")
+            _update_root_task_state(
+                root_task_id=chain_log_id, state=states.PROGRESS,
+                meta={'current_step': '채용공고 페이지를 열기 위해 가상 브라우저를 실행 중입니다...', 'pipeline_step': 'EXTRACT_HTML_BROWSER_LAUNCHING'}
+            )
             try:
                 browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
                 logger.info(f"{log_prefix} Browser launched.")
@@ -49,6 +58,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
                     exc=e_browser, 
                     traceback_str=traceback.format_exc(), 
                     meta={
+                        'current_step': "오류: 가상 브라우저 실행에 실패했습니다. 잠시 후 다시 시도해주세요.",
                         'status_message': "(1_extract_html) 브라우저 실행 실패", 
                         'error_message': str(e_browser), 
                         'url': url,
@@ -66,10 +76,18 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
                 page.set_default_navigation_timeout(PAGE_NAVIGATION_TIMEOUT)
                 
                 logger.info(f"{log_prefix} Navigating to URL: {url}")
+                _update_root_task_state(
+                    root_task_id=chain_log_id, state=states.PROGRESS,
+                    meta={'current_step': f'채용공고 페이지에 접속하고 있습니다: {url}', 'pipeline_step': 'EXTRACT_HTML_PAGE_NAVIGATING'}
+                )
                 page.goto(url, wait_until="domcontentloaded")
                 logger.info(f"{log_prefix} Successfully navigated to URL. Current page URL: {page.url}")
 
                 logger.info(f"{log_prefix} iframe 처리 및 페이지 내용 가져오기 시작.")
+                _update_root_task_state(
+                    root_task_id=chain_log_id, state=states.PROGRESS,
+                    meta={'current_step': '채용공고 페이지의 전체 내용을 불러오는 중입니다...', 'pipeline_step': 'EXTRACT_HTML_GETTING_CONTENT'}
+                )
                 page_content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, str(task_id))
                 logger.info(f"{log_prefix} 페이지 내용 가져오기 완료 (길이: {len(page_content)}).")
 
@@ -82,6 +100,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
                     exc=e_playwright, 
                     traceback_str=traceback.format_exc(), 
                     meta={
+                        'current_step': "오류: 채용공고 페이지 분석 중 문제가 발생했습니다. (Playwright 오류)",
                         'status_message': "(1_extract_html) Playwright 작업 실패", 
                         'error_message': error_message, 
                         'url': url,
@@ -99,6 +118,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
                     exc=e_general, 
                     traceback_str=traceback.format_exc(), 
                     meta={
+                        'current_step': "오류: 채용공고 HTML 추출 중 예기치 않은 문제가 발생했습니다.",
                         'status_message': "(1_extract_html) HTML 추출 중 예기치 않은 오류", 
                         'error_message': error_message, 
                         'url': url,
@@ -118,6 +138,10 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
                 logger.info(f"{log_prefix} Playwright context cleanup finished.")
         
         logger.info(f"{log_prefix} Playwright operations complete.")
+        _update_root_task_state(
+            root_task_id=chain_log_id, state=states.PROGRESS,
+            meta={'current_step': '추출된 채용공고 내용을 저장하고 있습니다...', 'pipeline_step': 'EXTRACT_HTML_SAVING_CONTENT'}
+        )
 
         os.makedirs("logs", exist_ok=True)
         filename_base = sanitize_filename(url, ensure_unique=False)
@@ -139,8 +163,9 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
 
         _update_root_task_state(
             root_task_id=chain_log_id,
-            state=states.STARTED, 
+            state=states.PROGRESS,
             meta={
+                'current_step': "채용공고 HTML 추출 완료. 다음 단계로 이동합니다.",
                 'status_message': "(1_extract_html) HTML 추출 및 저장 완료", 
                 'html_file_path': html_file_path,
                 'current_task_id': str(task_id),
@@ -159,6 +184,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
             exc=e_reject, 
             traceback_str=getattr(e_reject, 'traceback', traceback.format_exc()),
             meta={
+                'current_step': f"오류: HTML 추출 작업 중 문제가 발생하여 중단되었습니다. (사유: {e_reject.reason})",
                 'status_message': f"(1_extract_html) 작업 명시적 거부: {e_reject.reason}", 
                 'error_message': str(e_reject.reason), 
                 'reason_for_reject': getattr(e_reject, 'message', str(e_reject)),
@@ -177,6 +203,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
             exc=e_max_retries, 
             traceback_str=traceback.format_exc(), 
             meta={
+                'current_step': "오류: HTML 추출 작업 재시도 한도 초과. 관리자에게 문의하세요.",
                 'status_message': "(1_extract_html) 최대 재시도 초과", 
                 'error_message': error_message, 
                 'original_exception': str(e_max_retries),
@@ -195,6 +222,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
             exc=e_outer, 
             traceback_str=traceback.format_exc(), 
             meta={
+                'current_step': "오류: HTML 추출 중 예기치 않은 심각한 오류 발생. 관리자에게 문의하세요.",
                 'status_message': "(1_extract_html) 처리되지 않은 심각한 오류", 
                 'error_message': error_message,
                 'current_task_id': str(task_id),

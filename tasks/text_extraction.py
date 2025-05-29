@@ -64,8 +64,13 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         logger.info(f"{log_prefix} Starting text extraction from page_content (length: {len(html_content)})")
         _update_root_task_state(
             root_task_id=chain_log_id, 
-            state=states.STARTED,
-            meta={'status_message': f"({step_log_id}) HTML 내용에서 텍스트 추출 시작", 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_STARTED'}
+            state=states.PROGRESS,
+            meta={
+                'current_step': '추출된 HTML 내용에서 텍스트 정보를 분석하고 있습니다...',
+                'status_message': f"({step_log_id}) HTML 내용에서 텍스트 추출 시작", 
+                'current_task_id': task_id, 
+                'pipeline_step': 'TEXT_EXTRACTION_STARTED'
+            }
         )
 
         logger.debug(f"{log_prefix} HTML content from prev_result successfully received (length verified as {len(html_content)}).")
@@ -155,8 +160,14 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         logger.info(f"{log_prefix} Text extracted and saved to: {extracted_text_file_path} (Final Length: {len(text)}) ")
         _update_root_task_state(
             root_task_id=chain_log_id,
-            state=states.STARTED,
-            meta={'status_message': f"({step_log_id}) 텍스트 파일 저장 완료", 'text_file_path': extracted_text_file_path, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_COMPLETED'}
+            state=states.PROGRESS,
+            meta={
+                'current_step': '텍스트 추출 완료. 불필요한 내용 필터링을 준비 중입니다...',
+                'status_message': f"({step_log_id}) 텍스트 파일 저장 완료", 
+                'text_file_path': extracted_text_file_path, 
+                'current_task_id': task_id, 
+                'pipeline_step': 'TEXT_EXTRACTION_COMPLETED'
+            }
         )
         
         result_to_return = {"text_file_path": extracted_text_file_path, 
@@ -176,7 +187,13 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
             state=states.FAILURE, 
             exc=e_fnf, 
             traceback_str=traceback.format_exc(), 
-            meta={'status_message': f"({step_log_id}) 텍스트 추출 실패 (파일 없음)", **err_details_fnf, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_FAILED'}
+            meta={
+                'current_step': f'오류: 텍스트 추출 중 필요한 파일을 찾지 못했습니다. ({e_fnf})',
+                'status_message': f"({step_log_id}) 텍스트 추출 실패 (파일 없음)", 
+                **err_details_fnf, 
+                'current_task_id': task_id, 
+                'pipeline_step': 'TEXT_EXTRACTION_FAILED'
+            }
         )
         raise
     except IOError as e_io:
@@ -187,7 +204,13 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
             state=states.FAILURE, 
             exc=e_io, 
             traceback_str=traceback.format_exc(), 
-            meta={'status_message': f"({step_log_id}) 텍스트 추출 실패 (IO 오류)", **err_details_io, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_FAILED'}
+            meta={
+                'current_step': f'오류: 텍스트 추출 중 파일 입출력 문제가 발생했습니다. ({e_io})',
+                'status_message': f"({step_log_id}) 텍스트 추출 실패 (IO 오류)", 
+                **err_details_io, 
+                'current_task_id': task_id, 
+                'pipeline_step': 'TEXT_EXTRACTION_FAILED'
+            }
         )
         raise
     except Exception as e_general:
@@ -205,7 +228,13 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
             state=states.FAILURE, 
             exc=e_general, 
             traceback_str=traceback.format_exc(), 
-            meta={'status_message': f"({step_log_id}) 텍스트 추출 중 알 수 없는 오류", **err_details_general, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_FAILED'}
+            meta={
+                'current_step': '오류: 텍스트 추출 중 예기치 않은 문제가 발생했습니다.',
+                'status_message': f"({step_log_id}) 텍스트 추출 중 알 수 없는 오류", 
+                **err_details_general, 
+                'current_task_id': task_id, 
+                'pipeline_step': 'TEXT_EXTRACTION_FAILED'
+            }
         )
         raise
     finally:
