@@ -278,27 +278,17 @@ async def get_task_status_internal(task_id: str, celery_app_instance_param): # c
             current_step_from_meta = meta_info.get('current_step_message') or meta_info.get('status_message') or meta_info.get('pipeline_status')
 
         if response_status == states.SUCCESS:
-            # 수정된 로직: final_output에서 cover_letter_text 또는 generated_text 추출 시도
-            potential_result_source = meta_info if meta_info else task_result.result
-            cover_letter_text_extracted = None
-
-            if isinstance(potential_result_source, dict):
-                final_output_dict = potential_result_source.get("final_output") # "final_result" -> "final_output"
-                if isinstance(final_output_dict, dict):
-                    # cover_letter_text 또는 generated_text 키를 순차적으로 확인
-                    cover_letter_text_extracted = final_output_dict.get("cover_letter_text")
-                    if not cover_letter_text_extracted:
-                        cover_letter_text_extracted = final_output_dict.get("generated_text")
+            # meta에 자기소개서 텍스트 또는 대체 메시지가 직접 저장되므로, task_result.info 또는 task_result.result를 바로 사용
+            raw_result = task_result.info if task_result.info is not None else task_result.result
             
-            if cover_letter_text_extracted:
-                result_data = cover_letter_text_extracted
-                logger.info(f"{log_prefix} SUCCESS 상태. 'final_output'의 'cover_letter_text' 또는 'generated_text'에서 자기소개서 텍스트 추출 성공.")
+            if isinstance(raw_result, str):
+                result_data = raw_result
+                logger.info(f"{log_prefix} SUCCESS 상태. 결과(자기소개서 또는 메시지)를 직접 사용: {try_format_log(result_data)}")
             else:
-                # 자기소개서 텍스트를 직접 찾지 못한 경우, 이전처럼 전체 result_data를 사용하되 경고 로깅
-                result_data = potential_result_source
-                logger.warning(f"{log_prefix} SUCCESS 상태이지만 'final_output' 내에서 'cover_letter_text' 또는 'generated_text'를 찾을 수 없음. 전체 결과 반환: {try_format_log(result_data)}")
+                # 예상치 못한 경우 (문자열이 아닌 경우), 기록을 남기고 전체 raw_result 반환
+                result_data = raw_result 
+                logger.warning(f"{log_prefix} SUCCESS 상태이지만 결과가 문자열이 아님. Type: {type(raw_result)}. 전체 결과 반환: {try_format_log(result_data)}")
 
-            # logger.debug(f"{log_prefix} 상태: SUCCESS. 결과 데이터 (Info 우선): {try_format_log(result_data)}")
         elif response_status == states.FAILURE:
             error_details = meta_info 
             if not (isinstance(error_details, dict) and error_details.get('error_message')): 
