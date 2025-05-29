@@ -231,8 +231,8 @@ async def start_task(fastapi_request: Request, request_body: StartTaskRequest): 
         logger.info(f"[ReqID: {request_id}] Attempting to call process_job_posting_pipeline. URL: {job_posting_url}, Prompt present: {bool(user_prompt)}")
         
         task_id_for_tracking = process_job_posting_pipeline(
-            job_posting_url=job_posting_url, 
-            user_prompt=user_prompt,
+            url=job_posting_url,
+            prompt=user_prompt,
             root_task_id=request_id 
         )
         logger.info(f"[ReqID: {request_id}] process_job_posting_pipeline called. Returned task_id_for_tracking: {task_id_for_tracking}")
