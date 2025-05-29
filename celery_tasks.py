@@ -93,14 +93,51 @@ def sanitize_filename(url_or_name: str, extension: str = "", ensure_unique: bool
         logger.warning(f"Returning error-fallback filename: {error_name}")
         return error_name
 
-def _update_root_task_state(root_task_id: str, state: str, meta: dict = None, exc: Exception = None, traceback_str: str = None):
-    logger.debug(f"[StateUpdateDebug] Root task {root_task_id} - Attempting to update state to '{state}' with meta: {meta}")
+def _update_root_task_state(root_task_id: str, state: str, meta: Optional[Dict[str, Any]] = None, 
+                            exc: Optional[Exception] = None, traceback_str: Optional[str] = None):
+    log_prefix = f"[StateUpdate / Root {root_task_id}]"
     try:
         if not root_task_id:
-            logger.warning("[StateUpdateWarning] root_task_id is None or empty, cannot update state.")
+            logger.warning(f"{log_prefix} root_task_id가 제공되지 않아 상태 업데이트를 건너<0xE1><0x8A><0xB5>니다.")
             return
 
-        task_result = AsyncResult(root_task_id, app=celery_app)
+        current_meta = meta if meta is not None else {}
+        
+        # 기존 메타 정보 가져오기 시도 (덮어쓰기 방지 및 병합 위함)
+        # 참고: 이 방식은 backend.get_result_meta() 와 같은 것이 있다면 더 좋을 수 있음
+        # 현재 AsyncResult().info 를 사용하면 이전 meta를 가져올 수 있음
+        try:
+            # 전역 celery_app 사용
+            existing_task_result = AsyncResult(root_task_id, app=celery_app)
+            existing_meta = existing_task_result.info if isinstance(existing_task_result.info, dict) else {}
+            if existing_meta:
+                # logger.debug(f"{log_prefix} 기존 메타 정보 발견: {try_format_log(existing_meta)}")
+                # 새로운 메타로 기존 메타를 업데이트 (새로운 정보 우선)
+                merged_meta = {**existing_meta, **current_meta}
+                current_meta = merged_meta
+            # else:
+                # logger.debug(f"{log_prefix} 기존 메타 정보 없음 또는 유효하지 않음.")
+        except Exception as e_meta:
+            logger.warning(f"{log_prefix} 기존 메타 정보 로드 중 오류: {e_meta}", exc_info=True)
+            # 오류 발생 시에도 전달된 current_meta로 계속 진행
+
+        # 최종적으로 저장될 메타 정보 로깅
+        # logger.info(f"{log_prefix} 최종 저장될 메타: {try_format_log(current_meta)}")
+
+        # Celery 백엔드를 통해 상태와 메타데이터 저장
+        # 전역 celery_app 사용
+        celery_app.backend.store_result(
+            task_id=root_task_id,
+            result=current_meta, # Celery에서 meta는 result 필드에 저장됨
+            state=state,
+            traceback=traceback_str, # 실패 시 트레이스백 정보
+            request=None # 실제 TaskRequest 객체가 없으므로 None으로 설정
+        )
+        logger.info(f"{log_prefix} 상태 '{state}' 및 메타 정보 업데이트 성공.")
+        
+    except Exception as e:
+        # 이 함수 내에서 예외 발생 시, 재귀적으로 자신을 호출하지 않도록 주의
+        logger.critical(f"[StateUpdateFailureCritical] Critically failed to update root task {root_task_id} state: {e}", exc_info=True)
 
         # 실패 상태 처리
         if state == 'FAILURE':
@@ -1386,85 +1423,73 @@ def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str
         return root_task_id 
 
 
-@celery_app.task(name='celery_tasks.handle_pipeline_completion')
-def handle_pipeline_completion(result_or_request_obj, root_task_id: str, is_success: bool):
-    """
-    파이프라인 체인의 성공 또는 실패를 처리하는 콜백 태스크입니다.
-    성공 시: result_or_request_obj는 이전 태스크(step_4)의 결과입니다.
-    실패 시: result_or_request_obj는 실패한 태스크의 request 객체일 수 있습니다 (Celery 버전에 따라 다름).
-               또는 link_error로 호출된 경우, 실패한 task_id가 암묵적으로 컨텍스트에 있을 수 있습니다.
-               여기서는 is_success 플래그를 사용하여 성공/실패를 명확히 구분합니다.
-    """
-    log_prefix = f"[PipelineCallback {root_task_id}]"
-    logger.info(f"{log_prefix} Completion handler called. Is Success: {is_success}")
+@celery_app.task(bind=True, name="celery_tasks.handle_pipeline_completion")
+def handle_pipeline_completion(self, result_or_request_obj, *, root_task_id: str, is_success: bool):
+    # `result_or_request_obj`는 성공 시 이전 태스크의 결과, 실패 시 Request 객체 (오류 정보를 포함)일 수 있습니다.
+    # `is_success`와 `root_task_id`는 .s()를 통해 전달받은 추가 인자입니다.
+    
+    task_id = self.request.id # 현재 콜백 태스크의 ID
+    log_prefix = f"[PipelineCompletion / Root {root_task_id} / CallbackTask {task_id}]"
+    logger.info(f"{log_prefix} 파이프라인 완료 콜백 시작. Success: {is_success}")
+
+    final_status_meta = {
+        'root_task_id': root_task_id,
+        'callback_task_id': task_id,
+        'pipeline_overall_status': 'COMPLETED_SUCCESSFULLY' if is_success else 'COMPLETED_WITH_ERRORS',
+        'final_result_type': type(result_or_request_obj).__name__
+    }
 
     if is_success:
-        # result_or_request_obj는 step_4_generate_cover_letter의 반환 값입니다.
-        final_result_from_chain = result_or_request_obj 
-        logger.info(f"{log_prefix} Pipeline completed successfully. Final result from chain received.")
-        # logger.debug(f"{log_prefix} Final result details: {final_result_from_chain}")
+        # 성공 시 result_or_request_obj는 마지막 태스크(step_4)의 결과입니다.
+        logger.info(f"{log_prefix} 파이프라인 성공. 마지막 단계 결과: {try_format_log(result_or_request_obj)}")
+        final_status_meta['status_message'] = '자기소개서 생성 파이프라인이 성공적으로 완료되었습니다.'
+        final_status_meta['full_cover_letter_text'] = result_or_request_obj.get('full_cover_letter_text', 'N/A')
+        final_status_meta['cover_letter_file_path'] = result_or_request_obj.get('cover_letter_file_path', 'N/A')
+        final_status_meta['final_step_result'] = result_or_request_obj # 마지막 단계의 전체 결과 저장
 
-        if isinstance(final_result_from_chain, dict) and final_result_from_chain.get('status') == 'SUCCESS':
-            # 최종 상태를 SUCCESS로 업데이트하고, step_4의 결과를 meta에 저장
-            success_meta = {
-                **final_result_from_chain, # step_4 결과 전체 포함
-                'status_message': '파이프라인 성공적으로 완료',
-                'pipeline_status': 'COMPLETED_SUCCESS' # 파이프라인 전체 상태
-            }
-            _update_root_task_state(root_task_id, state=states.SUCCESS, meta=success_meta)
-            logger.info(f"{log_prefix} Root task {root_task_id} marked as SUCCESS with final results.")
-        else:
-            error_message = "Pipeline chain reported success, but the final result format was unexpected or indicated an internal issue in step 4."
-            logger.error(f"{log_prefix} {error_message} Result: {final_result_from_chain}")
-            failure_meta = {
-                'status_message': '파이프라인 완료 (최종 결과 형식 오류)',
-                'error': error_message,
-                'details': str(final_result_from_chain),
-                'root_task_id': root_task_id,
-                'pipeline_status': 'COMPLETION_FAILURE_UNEXPECTED_FORMAT' # 파이프라인 전체 상태
-            }
-            if isinstance(final_result_from_chain, dict):
-                 failure_meta.update(final_result_from_chain)
-            _update_root_task_state(root_task_id, state=states.FAILURE, meta=failure_meta, exc=ValueError(error_message))
-            logger.error(f"{log_prefix} Root task {root_task_id} marked as FAILURE due to unexpected final result format.")
+        _update_root_task_state(
+            root_task_id,
+            state=states.SUCCESS, # 전체 파이프라인 성공 상태
+            meta=final_status_meta
+        )
     else:
-        # 파이프라인 내의 어떤 태스크에서 오류 발생
-        # link_error는 실패한 태스크의 ID나 request 객체를 직접 전달하지 않을 수 있습니다.
-        # 대신, root_task_id를 사용하여 AsyncResult로 상태를 조회하고,
-        # 이미 각 단계의 실패 처리 로직에서 _update_root_task_state가 호출되었을 가능성이 높습니다.
-        # 이 콜백은 실패가 발생했음을 확인하고, 필요한 경우 추가적인 정리나 알림을 수행할 수 있습니다.
-        # 여기서는 이미 개별 태스크에서 _update_root_task_state를 통해 FAILURE로 마킹했을 것이므로,
-        # 중복 업데이트를 피하거나, 최종 실패 확인 메시지만 로깅할 수 있습니다.
+        # 실패 시 result_or_request_obj는 예외를 발생시킨 태스크의 Request 객체이거나, 
+        # link_error로 직접 전달된 예외 정보일 수 있습니다.
+        # Celery의 기본 동작은 link_error 콜백의 첫 번째 인자로 failing task의 ID를 전달합니다.
+        # 그러나 여기서는 .s()로 커스텀 인자를 사용하므로, result_or_request_obj는 이전 태스크의 ID가 될 수 있습니다.
+        # 중요한 것은 root_task_id를 통해 상태를 업데이트 하는 것입니다.
         
-        # 현재 AsyncResult를 통해 root_task_id의 상태를 확인
-        task_result = AsyncResult(root_task_id, app=celery_app)
-        current_meta = task_result.info or {}
-        current_status = task_result.status
+        error_info = "알 수 없는 오류"
+        error_details_dict = {}
         
-        logger.error(f"{log_prefix} Pipeline execution failed. Root task ID: {root_task_id}. Current status from backend: {current_status}. Current meta: {current_meta.get('error', 'No specific error in meta yet')}")
+        # result_or_request_obj가 Celery의 Request 객체인지, 아니면 다른 예외 정보인지 확인 필요
+        # 일반적으로 link_error로 호출되면, 첫 인자는 request 객체(실패한 태스크의 정보)를 받습니다.
+        # .s()로 인자를 넘기면, 그 인자들이 우선될 수 있습니다.
+        # 여기서는 is_success=False로 넘어왔다는 사실에 집중합니다.
 
-        # 만약 _update_root_task_state가 어떤 이유로든 호출되지 않았다면, 여기서 일반적인 실패로 마킹
-        if current_status != states.FAILURE:
-            logger.warning(f"{log_prefix} Root task {root_task_id} was not already in FAILURE state. Marking it now.")
-            failure_meta = {
-                'status_message': '파이프라인 실행 중 알 수 없는 오류 발생 (콜백에서 감지)',
-                'error': 'An unspecified error occurred within the pipeline chain.',
-                'details': 'Failure detected by link_error callback.',
-                'root_task_id': root_task_id,
-                'pipeline_status': 'COMPLETION_FAILURE_CALLBACK_DETECTED' # 파이프라인 전체 상태
-            }
-            # result_or_request_obj가 Exception 객체인지 확인하여 exc 인자로 전달 시도
-            final_exc = None
-            if isinstance(result_or_request_obj, Exception):
-                final_exc = result_or_request_obj
-            elif hasattr(result_or_request_obj, 'id'): # TaskRequest 객체인 경우
-                failed_task_result = AsyncResult(result_or_request_obj.id, app=celery_app)
-                if failed_task_result.failed():
-                    final_exc = failed_task_result.result # 실제 예외 객체
-            
-            _update_root_task_state(root_task_id, state=states.FAILURE, meta=failure_meta, exc=final_exc or ValueError("Pipeline failed (unknown reason from callback)"))
-        else:
-            logger.info(f"{log_prefix} Root task {root_task_id} was already marked as {current_status}. Callback confirms failure.")
+        logger.error(f"{log_prefix} 파이프라인 실패. 전달된 객체: {try_format_log(result_or_request_obj)}")
+        final_status_meta['status_message'] = '자기소개서 생성 파이프라인 중 오류가 발생했습니다.'
+        
+        # 이전 단계에서 _update_root_task_state를 통해 FAILURE 상태와 상세 에러가 이미 기록되었을 가능성이 높습니다.
+        # 여기서는 파이프라인이 '오류로 완료됨'을 기록하고, 필요 시 추가 정보를 meta에 남깁니다.
+        # AsyncResult(root_task_id).info를 통해 기존 meta를 가져와서 비교/보강할 수도 있습니다.
+        try:
+            root_task_info = AsyncResult(root_task_id, app=celery_app).info
+            if isinstance(root_task_info, dict):
+                final_status_meta['last_known_error'] = root_task_info.get('error', 'No specific error found in meta.')
+                final_status_meta['last_known_status_message'] = root_task_info.get('status_message', 'N/A')
+        except Exception as e_fetch_meta:
+            logger.warning(f"{log_prefix} 실패 처리 중 루트 태스크 메타 조회 실패: {e_fetch_meta}")
+
+        _update_root_task_state(
+            root_task_id,
+            state=states.FAILURE, # 전체 파이프라인 실패 상태 (이미 설정되었을 수 있지만, 재확인)
+            meta=final_status_meta # 실패 관련 추가 정보 업데이트
+            # exc, traceback_str은 여기서 직접 알기 어려우므로, 이전 단계에서 기록된 것을 의존합니다.
+        )
+
+    logger.info(f"{log_prefix} 파이프라인 완료 콜백 종료.")
+    return { "callback_processed": True, "root_task_id": root_task_id, "final_status_reported": final_status_meta.get('pipeline_overall_status') }
 
 
 # 예외 정보 추출 헬퍼 함수 (기존 정의 유지)
