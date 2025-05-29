@@ -1,0 +1,204 @@
+from celery_app import celery_app
+import logging
+from playwright.sync_api import sync_playwright, Error as PlaywrightError
+import os
+import hashlib
+import uuid
+import traceback
+from celery.exceptions import MaxRetriesExceededError, Reject
+from celery import states
+from ..utils.playwright_utils import (_get_playwright_page_content_with_iframes_processed,
+                               DEFAULT_PAGE_TIMEOUT, PAGE_NAVIGATION_TIMEOUT)
+from ..utils.file_utils import sanitize_filename, try_format_log
+from ..utils.celery_utils import _update_root_task_state
+
+logger = logging.getLogger(__name__)
+
+@celery_app.task(bind=True, name='celery_tasks.step_1_extract_html', max_retries=1, default_retry_delay=10)
+def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
+    logger.info("GLOBAL_ENTRY_POINT: step_1_extract_html function called.")
+    task_id = self.request.id
+    log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step 1_extract_html]"
+    logger.info(f"{log_prefix} ---------- Task started. URL: {url} ----------")
+    logger.debug(f"{log_prefix} Input URL: {url}, Chain Log ID: {chain_log_id}")
+
+    _update_root_task_state(
+        root_task_id=chain_log_id,
+        state=states.STARTED,
+        meta={
+            'status_message': f"(1_extract_html) HTML 추출 시작: {url}", 
+            'current_task_id': str(task_id), 
+            'url_for_step1': url,
+            'pipeline_step': 'EXTRACT_HTML_STARTED'
+        }
+    )
+
+    html_file_path = ""
+    try:
+        logger.info(f"{log_prefix} Initializing Playwright...")
+        with sync_playwright() as p:
+            logger.info(f"{log_prefix} Playwright initialized. Launching browser...")
+            try:
+                browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
+                logger.info(f"{log_prefix} Browser launched.")
+            except Exception as e_browser:
+                logger.error(f"{log_prefix} Error launching browser: {e_browser}", exc_info=True)
+                _update_root_task_state(
+                    root_task_id=chain_log_id,
+                    state=states.FAILURE, 
+                    exc=e_browser, 
+                    traceback_str=traceback.format_exc(), 
+                    meta={
+                        'status_message': "(1_extract_html) 브라우저 실행 실패", 
+                        'error_message': str(e_browser), 
+                        'url': url,
+                        'current_task_id': str(task_id),
+                        'pipeline_step': 'EXTRACT_HTML_BROWSER_LAUNCH_FAILED'
+                    }
+                )
+                self.update_state(state=states.FAILURE, meta={'error': str(e_browser)})
+                raise Reject(f"Browser launch failed: {e_browser}", requeue=False)
+
+            try:
+                page = browser.new_page()
+                logger.info(f"{log_prefix} New page created. Setting default timeout to {DEFAULT_PAGE_TIMEOUT}ms.")
+                page.set_default_timeout(DEFAULT_PAGE_TIMEOUT)
+                page.set_default_navigation_timeout(PAGE_NAVIGATION_TIMEOUT)
+                
+                logger.info(f"{log_prefix} Navigating to URL: {url}")
+                page.goto(url, wait_until="domcontentloaded")
+                logger.info(f"{log_prefix} Successfully navigated to URL. Current page URL: {page.url}")
+
+                logger.info(f"{log_prefix} iframe 처리 및 페이지 내용 가져오기 시작.")
+                page_content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, str(task_id))
+                logger.info(f"{log_prefix} 페이지 내용 가져오기 완료 (길이: {len(page_content)}).")
+
+            except PlaywrightError as e_playwright:
+                error_message = f"Playwright operation failed: {e_playwright}"
+                logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+                _update_root_task_state(
+                    root_task_id=chain_log_id,
+                    state=states.FAILURE, 
+                    exc=e_playwright, 
+                    traceback_str=traceback.format_exc(), 
+                    meta={
+                        'status_message': "(1_extract_html) Playwright 작업 실패", 
+                        'error_message': error_message, 
+                        'url': url,
+                        'current_task_id': str(task_id),
+                        'pipeline_step': 'EXTRACT_HTML_PLAYWRIGHT_FAILED'
+                    }
+                )
+                raise Reject(error_message, requeue=False)
+            except Exception as e_general:
+                error_message = f"An unexpected error occurred during HTML extraction: {e_general}"
+                logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+                _update_root_task_state(
+                    root_task_id=chain_log_id,
+                    state=states.FAILURE, 
+                    exc=e_general, 
+                    traceback_str=traceback.format_exc(), 
+                    meta={
+                        'status_message': "(1_extract_html) HTML 추출 중 예기치 않은 오류", 
+                        'error_message': error_message, 
+                        'url': url,
+                        'current_task_id': str(task_id),
+                        'pipeline_step': 'EXTRACT_HTML_UNEXPECTED_ERROR'
+                    }
+                )
+                raise Reject(error_message, requeue=False)
+            finally:
+                logger.info(f"{log_prefix} Closing browser.")
+                if 'browser' in locals() and browser:
+                    try:
+                        browser.close()
+                        logger.info(f"{log_prefix} Browser closed successfully.")
+                    except Exception as e_close:
+                        logger.warning(f"{log_prefix} Error closing browser: {e_close}", exc_info=True)
+                logger.info(f"{log_prefix} Playwright context cleanup finished.")
+        
+        logger.info(f"{log_prefix} Playwright operations complete.")
+
+        os.makedirs("logs", exist_ok=True)
+        filename_base = sanitize_filename(url, ensure_unique=False)
+        unique_file_id = hashlib.md5((chain_log_id + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]
+        html_file_name = f"{filename_base}_raw_html_{chain_log_id[:8]}_{unique_file_id}.html"
+        html_file_path = os.path.join("logs", html_file_name)
+            
+        logger.info(f"{log_prefix} Saving extracted page content to: {html_file_path}")
+        with open(html_file_path, "w", encoding="utf-8") as f:
+            f.write(page_content)
+        logger.info(f"{log_prefix} Page content successfully saved to {html_file_path}.")
+
+        result_data = {"html_file_path": html_file_path, "original_url": url, "page_content": page_content}
+        
+        result_data_for_log = result_data.copy()
+        if 'page_content' in result_data_for_log:
+            page_content_len = len(result_data_for_log['page_content']) if result_data_for_log['page_content'] is not None else 0
+            result_data_for_log['page_content'] = f"<page_content_omitted_from_log, length={page_content_len}>"
+
+        _update_root_task_state(
+            root_task_id=chain_log_id,
+            state=states.STARTED, 
+            meta={
+                'status_message': "(1_extract_html) HTML 추출 및 저장 완료", 
+                'html_file_path': html_file_path,
+                'current_task_id': str(task_id),
+                'pipeline_step': 'EXTRACT_HTML_COMPLETED'
+            }
+        )
+        logger.info(f"{log_prefix} ---------- Task finished successfully. Result for log: {try_format_log(result_data_for_log)} ----------")
+        logger.debug(f"{log_prefix} Returning from step_1: keys={list(result_data.keys())}, page_content length: {len(result_data.get('page_content', '')) if result_data.get('page_content') else 0}")
+        return result_data
+
+    except Reject as e_reject:
+        logger.warning(f"{log_prefix} Task explicitly rejected: {e_reject.reason}. Celery will handle retry/failure.")
+        _update_root_task_state(
+            root_task_id=chain_log_id,
+            state=states.FAILURE, 
+            exc=e_reject, 
+            traceback_str=getattr(e_reject, 'traceback', traceback.format_exc()),
+            meta={
+                'status_message': f"(1_extract_html) 작업 명시적 거부: {e_reject.reason}", 
+                'error_message': str(e_reject.reason), 
+                'reason_for_reject': getattr(e_reject, 'message', str(e_reject)),
+                'current_task_id': str(task_id),
+                'pipeline_step': 'EXTRACT_HTML_REJECTED'
+            }
+        ) 
+        raise
+
+    except MaxRetriesExceededError as e_max_retries:
+        error_message = "Max retries exceeded for HTML extraction."
+        logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+        _update_root_task_state(
+            root_task_id=chain_log_id,
+            state=states.FAILURE, 
+            exc=e_max_retries, 
+            traceback_str=traceback.format_exc(), 
+            meta={
+                'status_message': "(1_extract_html) 최대 재시도 초과", 
+                'error_message': error_message, 
+                'original_exception': str(e_max_retries),
+                'current_task_id': str(task_id),
+                'pipeline_step': 'EXTRACT_HTML_MAX_RETRIES'
+            }
+        )
+        raise
+
+    except Exception as e_outer:
+        error_message = f"Outer catch-all error in step_1_extract_html: {e_outer}"
+        logger.critical(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+        _update_root_task_state(
+            root_task_id=chain_log_id, 
+            state=states.FAILURE, 
+            exc=e_outer, 
+            traceback_str=traceback.format_exc(), 
+            meta={
+                'status_message': "(1_extract_html) 처리되지 않은 심각한 오류", 
+                'error_message': error_message,
+                'current_task_id': str(task_id),
+                'pipeline_step': 'EXTRACT_HTML_CRITICAL_ERROR'
+            }
+        )
+        raise Reject(f"Critical unhandled error: {e_outer}", requeue=False) 
