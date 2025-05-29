@@ -108,6 +108,10 @@ def try_format_log(data, max_len=200):
     except Exception:
         return f"[Unloggable data of type {type(data).__name__}]"
 
+# log_user_input 함수 정의 추가
+def log_user_input(request_id: str, job_url: str, has_prompt: bool):
+    logger.info(f"[UserInput / ReqID: {request_id}] Job URL: '{job_url}', Has Prompt: {has_prompt}")
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("FastAPI 애플리케이션 시작")
