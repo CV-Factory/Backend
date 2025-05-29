@@ -65,4 +65,15 @@ def sanitize_filename(url_or_name: str, extension: str = "", ensure_unique: bool
         return error_name
 
 def get_datetime_prefix():
-    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S") 
+    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+def save_content_to_file(file_path: str, content: str, encoding: str = "utf-8"):
+    """주어진 내용을 지정된 파일 경로에 저장합니다."""
+    try:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "w", encoding=encoding) as f:
+            f.write(content)
+        logger.info(f"Content successfully saved to: {file_path}")
+    except Exception as e:
+        logger.error(f"Error saving content to file {file_path}: {e}", exc_info=True)
+        raise 
