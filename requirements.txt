@@ -14,4 +14,5 @@ langchain-groq  # Groq API 사용을 위해 추가
 celery
 redis
 beautifulsoup4
-python-multipart 
+python-multipart
+python-dotenv # 환경 변수 관리를 위해 추가 

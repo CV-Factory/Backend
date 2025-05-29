@@ -8,21 +8,21 @@ from typing import Dict, Any, Optional
 
 from utils.file_utils import sanitize_filename, try_format_log # ../utils.file_utils -> utils.file_utils
 from utils.celery_utils import _update_root_task_state, get_detailed_error_info
-from generate_cover_letter_semantic import generate_cover_letter # ...generate_cover_letter_semantic -> generate_cover_letter_semantic
-from langchain_community.chat_models import ChatOpenAI
+from generate_cover_letter_semantic import generate_cover_letter
+from langchain_groq import ChatGroq
 from langchain.prompts import ChatPromptTemplate
 from langchain.chains import LLMChain
-from utils.file_utils import get_datetime_prefix, save_content_to_file # common_utils -> file_utils, save_content_to_file도 file_utils에서 가져오도록 통일
+from utils.file_utils import get_datetime_prefix, save_content_to_file
 from core.config import settings
 
 logger = logging.getLogger(__name__)
 
 # LLM 모델 초기화 (모듈 레벨에서 한 번만)
 try:
-    llm = ChatOpenAI(openai_api_key=settings.OPENAI_API_KEY, model_name=settings.OPENAI_MODEL_NAME)
-    logger.info("ChatOpenAI model loaded successfully during module initialization.")
+    llm = ChatGroq(groq_api_key=settings.GROQ_API_KEY, model_name=settings.GROQ_LLM_MODEL)
+    logger.info("ChatGroq model loaded successfully during module initialization.")
 except Exception as e:
-    logger.error(f"Failed to load ChatOpenAI model during module initialization: {e}")
+    logger.error(f"Failed to load ChatGroq model during module initialization: {e}")
     llm = None
 
 @celery_app.task(bind=True, name='celery_tasks.step_4_generate_cover_letter', max_retries=1, default_retry_delay=20)
