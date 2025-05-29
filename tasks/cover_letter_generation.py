@@ -12,8 +12,7 @@ from generate_cover_letter_semantic import generate_cover_letter # ...generate_c
 from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.chains import LLMChain
-from utils.common_utils import get_datetime_prefix
-from utils.file_utils import save_content_to_file
+from utils.file_utils import get_datetime_prefix, save_content_to_file # common_utils -> file_utils, save_content_to_file도 file_utils에서 가져오도록 통일
 from core.config import settings
 
 logger = logging.getLogger(__name__)

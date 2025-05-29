@@ -2,14 +2,13 @@ from celery_app import celery_app
 import logging
 import os
 import re
-from bs4 import BeautifulSoup, Comment
+from bs4 import BeautifulSoup, Comment, NavigableString
 import traceback
 from celery import states
 from typing import Dict
-from utils.file_utils import sanitize_filename
+from utils.file_utils import sanitize_filename, try_format_log
 from utils.celery_utils import _update_root_task_state
-from utils.common_utils import try_format_log
-from utils.file_utils import read_content_from_file
+from celery.exceptions import MaxRetriesExceededError, Reject
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +97,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         target_soup_object = soup
 
         logger.debug(f"{log_prefix} Extracting text with target_soup_object.get_text().")
-        text = target_soup_object.get_text(separator="\\n", strip=True)
+        text = target_soup_object.get_text(separator="\n", strip=True)
         logger.info(f"{log_prefix} Initial text extracted. Length: {len(text)}.")
         logger.debug(f"{log_prefix} Initial text (first 500 chars): {text[:500]}")
 

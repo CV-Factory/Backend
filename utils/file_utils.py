@@ -5,6 +5,8 @@ import time
 import uuid
 from urllib.parse import urlparse
 from typing import Any
+import datetime
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -60,4 +62,7 @@ def sanitize_filename(url_or_name: str, extension: str = "", ensure_unique: bool
         safe_ext = f".{extension}" if extension else ""
         error_name = f"error_filename_{timestamp}_{uuid.uuid4().hex[:4]}{safe_ext}"
         logger.warning(f"Returning error-fallback filename: {error_name}")
-        return error_name 
+        return error_name
+
+def get_datetime_prefix():
+    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S") 

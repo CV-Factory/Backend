@@ -7,8 +7,7 @@ from celery import shared_task, states
 from playwright.sync_api import sync_playwright
 
 from utils.celery_utils import _update_root_task_state
-from utils.common_utils import ensure_dir, sanitize_filename, get_datetime_prefix, try_format_log
-from utils.file_utils import save_content_to_file
+from utils.file_utils import save_content_to_file, get_datetime_prefix, sanitize_filename, ensure_dir
 from utils.html_utils import extract_page_content_with_playwright
 from utils.url_utils import get_domain_from_url
 
