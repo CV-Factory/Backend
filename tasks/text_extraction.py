@@ -63,7 +63,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         logger.info(f"{log_prefix} Starting text extraction from page_content (length: {len(html_content)})")
         _update_root_task_state(
             root_task_id=chain_log_id, 
-            state=states.PROGRESS,
+            state=states.STARTED,
             meta={
                 'current_step': '추출된 HTML 내용에서 텍스트 정보를 분석하고 있습니다...',
                 'status_message': f"({step_log_id}) HTML 내용에서 텍스트 추출 시작", 
@@ -159,7 +159,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         logger.info(f"{log_prefix} Text extracted and saved to: {extracted_text_file_path} (Final Length: {len(text)}) ")
         _update_root_task_state(
             root_task_id=chain_log_id,
-            state=states.PROGRESS,
+            state=states.STARTED,
             meta={
                 'current_step': '텍스트 추출 완료. 불필요한 내용 필터링을 준비 중입니다...',
                 'status_message': f"({step_log_id}) 텍스트 파일 저장 완료", 
