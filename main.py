@@ -351,9 +351,7 @@ async def stream_task_status(request: Request, task_id: str = Path(..., descript
                             'final': True 
                         }
                         try: # 최종 오류 메시지 전송 시도
-                            yield f"data: {json.dumps(current_payload_dict)}
-
-"
+                            yield f"data: {json.dumps(current_payload_dict)}" + "\n\n"
                         except Exception as e_yield_err:
                              logger.error(f"SSE Task ID: {task_id_str}, Error yielding final stream error to {client_ip}: {e_yield_err}")
                         is_final_sent = True
@@ -380,9 +378,7 @@ async def stream_task_status(request: Request, task_id: str = Path(..., descript
                         "final": True 
                     }
                     try: # 직렬화 오류 메시지 전송 시도
-                        yield f"data: {json.dumps(error_payload)}
-
-"
+                        yield f"data: {json.dumps(error_payload)}" + "\n\n"
                     except Exception as e_yield_ser_err:
                         logger.error(f"SSE Task ID: {task_id_str}, Error yielding serialization error to {client_ip}: {e_yield_ser_err}")
                     is_final_sent = True
@@ -392,9 +388,7 @@ async def stream_task_status(request: Request, task_id: str = Path(..., descript
                     logger.info(f"SSE Task ID: {task_id_str}, Sending data to {client_ip}: Status={current_payload_dict.get('status')}, Step='{current_payload_dict.get('current_step')}', Final={current_payload_dict.get('final')}")
                     # logger.debug(f"SSE Task ID: {task_id_str}, Full payload to {client_ip}: {try_format_log(current_payload_str)}")
                     try:
-                        yield f"data: {current_payload_str}
-
-"
+                        yield f"data: {current_payload_str}" + "\n\n"
                     except Exception as e_yield_data:
                         logger.error(f"SSE Task ID: {task_id_str}, Error yielding data to {client_ip}: {e_yield_data}. Breaking stream.")
                         is_final_sent = True # yield 실패 시 스트림 중단
@@ -420,9 +414,7 @@ async def stream_task_status(request: Request, task_id: str = Path(..., descript
                         "current_step": "Unexpected stream error",
                         "final": True
                     }
-                    yield f"data: {json.dumps(error_payload)}
-
-"
+                    yield f"data: {json.dumps(error_payload)}" + "\n\n"
                 except Exception as e_yield_final_error:
                     logger.error(f"SSE Task ID: {task_id_str}, 최종 에러 메시지 yield 중 추가 오류 to {client_ip}: {e_yield_final_error}")
         finally:
