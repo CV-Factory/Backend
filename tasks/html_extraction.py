@@ -24,7 +24,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
 
     _update_root_task_state(
         root_task_id=chain_log_id,
-        state=states.PROGRESS,
+        state=states.STARTED,
         meta={
             'current_step': '채용공고 분석 준비 중... (HTML 추출 단계 시작)',
             'status_message': f"(1_extract_html) HTML 추출 시작: {url}", 
@@ -38,13 +38,13 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
     try:
         logger.info(f"{log_prefix} Initializing Playwright...")
         _update_root_task_state(
-            root_task_id=chain_log_id, state=states.PROGRESS,
+            root_task_id=chain_log_id, state=states.STARTED,
             meta={'current_step': '채용공고 페이지 분석 도구를 준비하고 있습니다...', 'pipeline_step': 'EXTRACT_HTML_PLAYWRIGHT_INIT'}
         )
         with sync_playwright() as p:
             logger.info(f"{log_prefix} Playwright initialized. Launching browser...")
             _update_root_task_state(
-                root_task_id=chain_log_id, state=states.PROGRESS,
+                root_task_id=chain_log_id, state=states.STARTED,
                 meta={'current_step': '채용공고 페이지를 열기 위해 가상 브라우저를 실행 중입니다...', 'pipeline_step': 'EXTRACT_HTML_BROWSER_LAUNCHING'}
             )
             try:
@@ -77,7 +77,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
                 
                 logger.info(f"{log_prefix} Navigating to URL: {url}")
                 _update_root_task_state(
-                    root_task_id=chain_log_id, state=states.PROGRESS,
+                    root_task_id=chain_log_id, state=states.STARTED,
                     meta={'current_step': f'채용공고 페이지에 접속하고 있습니다: {url}', 'pipeline_step': 'EXTRACT_HTML_PAGE_NAVIGATING'}
                 )
                 page.goto(url, wait_until="domcontentloaded")
@@ -85,7 +85,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
 
                 logger.info(f"{log_prefix} iframe 처리 및 페이지 내용 가져오기 시작.")
                 _update_root_task_state(
-                    root_task_id=chain_log_id, state=states.PROGRESS,
+                    root_task_id=chain_log_id, state=states.STARTED,
                     meta={'current_step': '채용공고 페이지의 전체 내용을 불러오는 중입니다...', 'pipeline_step': 'EXTRACT_HTML_GETTING_CONTENT'}
                 )
                 page_content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, str(task_id))
@@ -139,7 +139,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
         
         logger.info(f"{log_prefix} Playwright operations complete.")
         _update_root_task_state(
-            root_task_id=chain_log_id, state=states.PROGRESS,
+            root_task_id=chain_log_id, state=states.STARTED,
             meta={'current_step': '추출된 채용공고 내용을 저장하고 있습니다...', 'pipeline_step': 'EXTRACT_HTML_SAVING_CONTENT'}
         )
 
@@ -163,7 +163,7 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
 
         _update_root_task_state(
             root_task_id=chain_log_id,
-            state=states.PROGRESS,
+            state=states.STARTED,
             meta={
                 'current_step': "채용공고 HTML 추출 완료. 다음 단계로 이동합니다.",
                 'status_message': "(1_extract_html) HTML 추출 및 저장 완료", 
