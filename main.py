@@ -278,23 +278,25 @@ async def get_task_status_internal(task_id: str, celery_app_instance_param): # c
             current_step_from_meta = meta_info.get('current_step_message') or meta_info.get('status_message') or meta_info.get('pipeline_status')
 
         if response_status == states.SUCCESS:
-            # 수정된 로직: final_result.cover_letter_text 추출 시도
+            # 수정된 로직: final_output에서 cover_letter_text 또는 generated_text 추출 시도
             potential_result_source = meta_info if meta_info else task_result.result
             cover_letter_text_extracted = None
 
             if isinstance(potential_result_source, dict):
-                final_result_dict = potential_result_source.get("final_result")
-                if isinstance(final_result_dict, dict):
-                    cover_letter_text_extracted = final_result_dict.get("cover_letter_text")
+                final_output_dict = potential_result_source.get("final_output") # "final_result" -> "final_output"
+                if isinstance(final_output_dict, dict):
+                    # cover_letter_text 또는 generated_text 키를 순차적으로 확인
+                    cover_letter_text_extracted = final_output_dict.get("cover_letter_text")
+                    if not cover_letter_text_extracted:
+                        cover_letter_text_extracted = final_output_dict.get("generated_text")
             
             if cover_letter_text_extracted:
                 result_data = cover_letter_text_extracted
-                logger.info(f"{log_prefix} SUCCESS 상태. 'final_result.cover_letter_text'에서 자기소개서 텍스트 추출 성공.")
-                # logger.debug(f"{log_prefix} 추출된 자기소개서 (일부): {try_format_log(result_data, max_len=100)}") # 필요시 로깅
+                logger.info(f"{log_prefix} SUCCESS 상태. 'final_output'의 'cover_letter_text' 또는 'generated_text'에서 자기소개서 텍스트 추출 성공.")
             else:
-                # cover_letter_text를 직접 찾지 못한 경우, 이전처럼 전체 result_data를 사용하되 경고 로깅
+                # 자기소개서 텍스트를 직접 찾지 못한 경우, 이전처럼 전체 result_data를 사용하되 경고 로깅
                 result_data = potential_result_source
-                logger.warning(f"{log_prefix} SUCCESS 상태이지만 'final_result.cover_letter_text' 경로에서 자기소개서 텍스트를 찾을 수 없음. 전체 결과 반환: {try_format_log(result_data)}")
+                logger.warning(f"{log_prefix} SUCCESS 상태이지만 'final_output' 내에서 'cover_letter_text' 또는 'generated_text'를 찾을 수 없음. 전체 결과 반환: {try_format_log(result_data)}")
 
             # logger.debug(f"{log_prefix} 상태: SUCCESS. 결과 데이터 (Info 우선): {try_format_log(result_data)}")
         elif response_status == states.FAILURE:
