@@ -46,9 +46,7 @@ def handle_pipeline_completion(self, result_or_request_obj: Any, *, root_task_id
         _update_root_task_state(
             root_task_id=root_task_id, 
             state=states.SUCCESS,
-            meta=meta_to_store, # cover_letter_output 키를 가진 딕셔너리를 meta로 전달
-            logger_instance=logger, # 로거 인스턴스 전달
-            log_prefix=log_prefix # 로그 접두사 전달
+            meta=meta_to_store # cover_letter_output 키를 가진 딕셔너리를 meta로 전달
         )
         logger.info(f"{log_prefix} Root task {root_task_id} 최종 상태 SUCCESS 및 meta 업데이트 요청됨. 전달된 meta: {try_format_log(meta_to_store)}")
 

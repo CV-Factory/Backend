@@ -6,6 +6,22 @@ from celery.result import AsyncResult
 
 logger = logging.getLogger(__name__)
 
+# try_format_log 함수 추가 시작
+def try_format_log(data, max_len=200):
+    if data is None:
+        return "None"
+    try:
+        if isinstance(data, bytes): # bytes 타입 처리 추가
+            s = data.decode('utf-8', errors='replace')
+        else:
+            s = str(data)
+        if len(s) > max_len:
+            return s[:max_len] + f"... (len: {len(s)})"
+        return s
+    except Exception:
+        return f"[Unloggable data of type {type(data).__name__}]"
+# try_format_log 함수 추가 끝
+
 def _update_root_task_state(root_task_id: str, state: str, meta: Optional[Dict[str, Any]] = None,
                             exc: Optional[Exception] = None, traceback_str: Optional[str] = None):
     log_prefix = f"[StateUpdate / Root {root_task_id}]"
@@ -43,7 +59,7 @@ def _update_root_task_state(root_task_id: str, state: str, meta: Optional[Dict[s
                 final_meta_for_update = current_meta_to_store
 
         # 실제 상태 업데이트
-        task_instance = celery_app_instance.AsyncResult(root_task_id) # AsyncResult로 태스크 인스턴스를 가져옴
+        task_instance = AsyncResult(root_task_id, app=celery_app_instance) # 수정된 부분
         task_instance.update_state(state=state, meta=final_meta_for_update)
         logger.info(f"{log_prefix} 상태 '{state}' 및 메타 정보 업데이트 성공. 저장된 meta: {try_format_log(final_meta_for_update)}")
 
