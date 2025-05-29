@@ -51,11 +51,13 @@ def handle_pipeline_completion(self, result_or_request_obj: Any, *, root_task_id
         # AsyncResult를 사용하여 직접 meta 업데이트
         try:
             root_task_async_result = AsyncResult(root_task_id, app=celery_app)
+            # meta에 딕셔너리 형태로 저장
+            meta_to_store = {'cover_letter_output': result_data_for_state}
             root_task_async_result.update_state(
                 state=states.SUCCESS,
-                meta=result_data_for_state
+                meta=meta_to_store
             )
-            logger.info(f"{log_prefix} Root task {root_task_id} 최종 상태 SUCCESS 및 meta 직접 업데이트 성공. 저장된 meta: {try_format_log(result_data_for_state)}")
+            logger.info(f"{log_prefix} Root task {root_task_id} 최종 상태 SUCCESS 및 meta 직접 업데이트 성공. 저장된 meta: {try_format_log(meta_to_store)}")
         except Exception as e_update:
             logger.error(f"{log_prefix} Root task {root_task_id} 상태/meta 직접 업데이트 중 오류: {e_update}", exc_info=True)
             # 실패 시 fallback으로 기존 _update_root_task_state 호출 (선택적)

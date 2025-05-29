@@ -283,16 +283,26 @@ async def get_task_status_internal(task_id: str, celery_app_instance_param): # c
             logger.info(f"{log_prefix} task_result.info 타입: {type(task_result.info)}, 값: {try_format_log(task_result.info)}")
             logger.info(f"{log_prefix} task_result.result 타입: {type(task_result.result)}, 값: {try_format_log(task_result.result)}")
 
-            # task_result.info를 우선 사용하고, None이면 task_result.result 사용
-            raw_result = task_result.info if task_result.info is not None else task_result.result
-            logger.info(f"{log_prefix} raw_result 타입: {type(raw_result)}, 값: {try_format_log(raw_result)}")
+            raw_meta = task_result.info if task_result.info is not None else task_result.result
+            logger.info(f"{log_prefix} raw_meta 타입: {type(raw_meta)}, 값: {try_format_log(raw_meta)}")
             
-            if isinstance(raw_result, str):
-                result_data = raw_result
-                logger.info(f"{log_prefix} SUCCESS. 결과(자기소개서 또는 메시지)를 문자열로 직접 사용: {try_format_log(result_data)}")
+            if isinstance(raw_meta, dict):
+                # pipeline_callbacks.py에서 'cover_letter_output' 키로 저장했으므로 해당 키로 추출 시도
+                extracted_text = raw_meta.get('cover_letter_output')
+                if isinstance(extracted_text, str):
+                    result_data = extracted_text
+                    logger.info(f"{log_prefix} SUCCESS. 'cover_letter_output'에서 문자열 결과 추출: {try_format_log(result_data)}")
+                else:
+                    # 'cover_letter_output' 키가 없거나, 있어도 문자열이 아닌 경우
+                    result_data = raw_meta # 일단 전체 메타를 보내고 프론트엔드에서 다시 확인
+                    logger.warning(f"{log_prefix} SUCCESS이지만 'cover_letter_output'에서 문자열 추출 실패. Type: {type(extracted_text)}. 전체 raw_meta 반환: {try_format_log(result_data)}")
+            elif isinstance(raw_meta, str):
+                # 만약 raw_meta가 이미 문자열이라면 (이전 로직의 fallback 또는 예외적 상황)
+                result_data = raw_meta
+                logger.info(f"{log_prefix} SUCCESS. raw_meta가 이미 문자열임: {try_format_log(result_data)}")
             else:
-                result_data = raw_result 
-                logger.warning(f"{log_prefix} SUCCESS이지만 결과가 문자열이 아님! Type: {type(raw_result)}. 전체 결과 반환: {try_format_log(result_data)}")
+                result_data = raw_meta 
+                logger.warning(f"{log_prefix} SUCCESS이지만 결과가 예상치 못한 타입임. Type: {type(raw_meta)}. 전체 결과 반환: {try_format_log(result_data)}")
 
         elif response_status == states.FAILURE:
             error_details = meta_info 
