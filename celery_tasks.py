@@ -436,108 +436,190 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
     logger.debug(f"{log_prefix} Input URL: {url}, Chain Log ID: {chain_log_id}")
 
     # 루트 작업 상태 업데이트 (시작)
-    _update_root_task_state(chain_log_id, f"(1_extract_html) HTML 추출 시작: {url}", meta={'current_task_id': str(task_id), 'url_for_step1': url})
+    _update_root_task_state(
+        chain_log_id, 
+        state=states.STARTED,
+        meta={
+            'status_message': f"(1_extract_html) HTML 추출 시작: {url}", 
+            'current_task_id': str(task_id), 
+            'url_for_step1': url,
+            'pipeline_step': 'EXTRACT_HTML_STARTED'
+        }
+    )
 
     html_file_path = ""
     try:
-        logger.info(f"{log_prefix} Playwright operations starting for URL: {url}")
-        _update_root_task_state(
-            chain_log_id, 
-            state=states.STARTED, # 전체 파이프라인은 여전히 '시작됨' (진행중) 상태
-            meta={
-                'status_message': f'웹 페이지 내용을 가져오고 있습니다... (URL: {url})', 
-                'current_step_code': 'EXTRACT_HTML_STARTED',
-                'original_url': url,
-                'current_task_id': task_id,
-                'step1_extract_html_status': 'IN_PROGRESS' # step_1 자체의 진행 상태
-            }
-        )
-
+        logger.info(f"{log_prefix} Initializing Playwright...")
+        logger.debug(f"{log_prefix} Playwright sync_playwright context starting...")
         with sync_playwright() as p:
-            logger.debug(f"{log_prefix} Launching browser.")
-            # browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'])
-            # 컨테이너 환경에서 Chrome_with_proxy 사용 시 발생 가능한 권한 문제 해결을 위해 headless=False 시도 및 추가 args
-            # browser = p.chromium.launch(headless=False, args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--user-data-dir=/tmp/playwright_user_data'])
-            
-            # 안정성을 위해 headless=True로 되돌리고, 필요한 args 유지
-            browser_args = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--single-process']
-            logger.info(f"{log_prefix} Using browser launch args: {browser_args}")
-            browser = p.chromium.launch(headless=True, args=browser_args)
+            logger.debug(f"{log_prefix} Playwright sync_playwright context active.")
+            logger.info(f"{log_prefix} Playwright initialized. Launching browser...")
+            try:
+                # browser = p.chromium.launch(headless=True) # 로컬 테스트 시
+                browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']) # Docker 환경
+                logger.info(f"{log_prefix} Browser launched.")
+                logger.debug(f"{log_prefix} Browser object: {browser}")
+            except Exception as e_browser:
+                logger.error(f"{log_prefix} Error launching browser: {e_browser}", exc_info=True)
+                _update_root_task_state(
+                    chain_log_id, 
+                    state=states.FAILURE, 
+                    exc=e_browser, 
+                    traceback_str=traceback.format_exc(), 
+                    meta={
+                        'status_message': "(1_extract_html) 브라우저 실행 실패", 
+                        'error_message': str(e_browser), 
+                        'url': url,
+                        'current_task_id': str(task_id),
+                        'pipeline_step': 'EXTRACT_HTML_BROWSER_LAUNCH_FAILED'
+                    }
+                )
+                self.update_state(state=states.FAILURE, meta={'error': str(e_browser)})
+                raise Reject(f"Browser launch failed: {e_browser}", requeue=False)
 
-            logger.info(f"{log_prefix} Browser launched. Creating new page.")
-            page = browser.new_page()
-            page.set_default_timeout(DEFAULT_PAGE_TIMEOUT) # 페이지 전체 기본 타임아웃 설정
-            page.set_default_navigation_timeout(PAGE_NAVIGATION_TIMEOUT) # 네비게이션 타임아웃
+            try:
+                page = browser.new_page()
+                logger.info(f"{log_prefix} New page created. Setting default timeout to {DEFAULT_PAGE_TIMEOUT}ms.")
+                logger.debug(f"{log_prefix} Page object: {page}")
+                page.set_default_timeout(DEFAULT_PAGE_TIMEOUT) # 모든 Playwright 작업에 대한 기본 타임아웃 설정
+                page.set_default_navigation_timeout(PAGE_NAVIGATION_TIMEOUT)
+                
+                logger.info(f"{log_prefix} Navigating to URL: {url}")
+                logger.debug(f"{log_prefix} Calling page.goto(\"{url}\", wait_until=\"domcontentloaded\")")
+                page.goto(url, wait_until="domcontentloaded") # 'load' 또는 'networkidle' 고려
+                logger.info(f"{log_prefix} Successfully navigated to URL. Current page URL: {page.url}")
+                logger.debug(f"{log_prefix} Navigation complete. Page URL after goto: {page.url}")
 
-            logger.info(f"{log_prefix} Navigating to URL: {url}")
-            page.goto(url, wait_until="domcontentloaded", timeout=PAGE_NAVIGATION_TIMEOUT) # domcontentloaded 또는 networkidle
-            logger.info(f"{log_prefix} Successfully navigated to URL. Page title: \"{page.title()}\"")
+                # 페이지 로드 후 추가적인 안정화 시간 (선택적)
+                # logger.info(f"{log_prefix} Waiting for 3 seconds for dynamic content to potentially load...")
+                # time.sleep(3)
 
-            logger.info(f"{log_prefix} Starting Playwright page content extraction including iframes.")
-            content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, str(task_id))
-            logger.info(f"{log_prefix} Page content extracted. Length: {len(content)}")
+                logger.info(f"{log_prefix} Starting iframe processing and content extraction.")
+                logger.debug(f"{log_prefix} Calling _get_playwright_page_content_with_iframes_processed for URL: {url}")
+                page_content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, str(task_id))
+                logger.info(f"{log_prefix} Page content extracted. Length: {len(page_content)}")
+                logger.debug(f"{log_prefix} Extracted page_content successfully (length verified).")
 
-            logger.info(f"{log_prefix} Closing browser.")
-            browser.close()
-            logger.info(f"{log_prefix} Browser closed successfully.")
+                # 파일 저장 로직
+                # ... (이하 동일)
+            except PlaywrightError as e_playwright: # Playwright 관련 주요 예외
+                error_message = f"Playwright operation failed: {e_playwright}"
+                logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+                _update_root_task_state(
+                    chain_log_id, 
+                    state=states.FAILURE, 
+                    exc=e_playwright, 
+                    traceback_str=traceback.format_exc(), 
+                    meta={
+                        'status_message': "(1_extract_html) Playwright 작업 실패", 
+                        'error_message': error_message, 
+                        'url': url,
+                        'current_task_id': str(task_id),
+                        'pipeline_step': 'EXTRACT_HTML_PLAYWRIGHT_FAILED'
+                    }
+                )
+                # self.update_state(state=states.FAILURE, meta={'error': str(e_playwright), 'url': url}) # 개별 작업 상태도 업데이트
+                # 실패 시 재시도 로직은 Celery의 max_retries에 의해 이미 처리됨. 여기서는 Reject로 명시적 실패 처리.
+                raise Reject(error_message, requeue=False) # 재시도하지 않고 실패 처리
+            except Exception as e_general:
+                error_message = f"An unexpected error occurred during HTML extraction: {e_general}"
+                logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+                _update_root_task_state(
+                    chain_log_id, 
+                    state=states.FAILURE, 
+                    exc=e_general, 
+                    traceback_str=traceback.format_exc(), 
+                    meta={
+                        'status_message': "(1_extract_html) HTML 추출 중 예기치 않은 오류", 
+                        'error_message': error_message, 
+                        'url': url,
+                        'current_task_id': str(task_id),
+                        'pipeline_step': 'EXTRACT_HTML_UNEXPECTED_ERROR'
+                    }
+                )
+                # self.update_state(state=states.FAILURE, meta={'error': str(e_general), 'url': url})
+                raise Reject(error_message, requeue=False)
+            finally:
+                logger.info(f"{log_prefix} Closing browser.")
+                if 'browser' in locals() and browser:
+                    try:
+                        browser.close()
+                        logger.info(f"{log_prefix} Browser closed successfully.")
+                    except Exception as e_close:
+                        logger.warning(f"{log_prefix} Error closing browser: {e_close}", exc_info=True)
+                logger.info(f"{log_prefix} Playwright context cleanup finished.")
         
-        logger.info(f"{log_prefix} Playwright context cleanup finished.")
         logger.info(f"{log_prefix} Playwright operations complete.")
 
-        logs_dir = "logs"
-        os.makedirs(logs_dir, exist_ok=True)
+        # 파일 이름 생성 및 저장
+        os.makedirs("logs", exist_ok=True)
+        filename_base = sanitize_filename(url, ensure_unique=False) # 고유 ID는 아래에서 추가
+        # 파일 이름에 chain_log_id의 일부와 고유 해시를 추가하여 추적 용이성 및 충돌 방지
+        unique_file_id = hashlib.md5((chain_log_id + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]
+        html_file_name = f"{filename_base}_raw_html_{chain_log_id[:8]}_{unique_file_id}.html"
+        html_file_path = os.path.join("logs", html_file_name)
+            
+        logger.info(f"{log_prefix} Saving extracted HTML to: {html_file_path}")
+        logger.debug(f"{log_prefix} Opening file {html_file_path} for writing page_content (length: {len(page_content)}).")
+        with open(html_file_path, "w", encoding="utf-8") as f:
+            f.write(page_content)
+        logger.info(f"{log_prefix} HTML content successfully saved to {html_file_path}.")
+
+        result_data = {"html_file_path": html_file_path, "original_url": url, "page_content": page_content} # page_content 추가
         
-        # 파일 이름 고유성 강화: chain_log_id (root_task_id) 추가
-        base_name_for_html = sanitize_filename(url, ensure_unique=False) + f"_raw_html_{chain_log_id[:8]}" # chain_log_id 앞 8자리 사용
-        unique_html_fn = sanitize_filename(base_name_for_html, "html", ensure_unique=True) # 파일명 중복 방지용 해시 추가
-        saved_html_path = os.path.join(logs_dir, unique_html_fn)
+        # 로깅을 위해 result_data의 page_content를 축약된 정보로 대체
+        result_data_for_log = result_data.copy()
+        if 'page_content' in result_data_for_log:
+            page_content_len = len(result_data_for_log['page_content']) if result_data_for_log['page_content'] is not None else 0
+            result_data_for_log['page_content'] = f"<page_content_omitted_from_log, length={page_content_len}>"
 
-        logger.info(f"{log_prefix} Saving extracted HTML to: {saved_html_path}")
-        with open(saved_html_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        logger.info(f"{log_prefix} HTML content successfully saved to {saved_html_path}.")
-
-        # 작업 완료 상태 업데이트 (성공적으로 HTML 추출 및 저장 후)
         _update_root_task_state(
-            chain_log_id, # 루트 태스크 ID
-            state=states.STARTED, # 전체 파이프라인은 여전히 '시작됨' (진행중) 상태
+            chain_log_id, 
+            state=states.STARTED, # 다음 단계가 있으므로 파이프라인은 계속 진행 중
             meta={
-                'original_url': url,
-                'html_file_path': saved_html_path,
-                'page_content_length': len(content), # 실제 content는 다음 단계로 전달하므로 길이만 저장
-                'last_completed_step_task_id': task_id, # 방금 완료된 개별 태스크 ID
-                'status_message': 'HTML 추출 완료. 텍스트 추출 단계로 진행합니다.', # 사용자에게 보여줄 메시지
-                'current_pipeline_step': 'TEXT_EXTRACTION_PENDING', # 파이프라인의 현재 위치/다음 단계
-                'step1_extract_html_status': 'SUCCESS' # step_1 자체의 완료 상태
+                'status_message': "(1_extract_html) HTML 추출 및 저장 완료", 
+                'html_file_path': html_file_path,
+                'current_task_id': str(task_id),
+                'pipeline_step': 'EXTRACT_HTML_COMPLETED'
             }
         )
-        
-        logger.info(f"{log_prefix} ---------- Task finished successfully. Returning result. ----------")
-        return {"original_url": url, "html_file_path": saved_html_path, "page_content": content} # page_content 포함하여 반환
-
-    except PlaywrightError as e_playwright:
-        error_message = f"Playwright operation failed: {e_playwright}"
-        logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
-        _update_root_task_state(chain_log_id, "(1_extract_html) Playwright 작업 실패", state=states.FAILURE, exc=e_playwright, traceback_str=traceback.format_exc(), meta={'error_message': error_message, 'url': url})
-        # self.update_state(state=states.FAILURE, meta={'error': str(e_playwright), 'url': url}) # 개별 작업 상태도 업데이트
-        # 실패 시 재시도 로직은 Celery의 max_retries에 의해 이미 처리됨. 여기서는 Reject로 명시적 실패 처리.
-        raise Reject(error_message, requeue=False) # 재시도하지 않고 실패 처리
-    except Exception as e_general:
-        error_message = f"An unexpected error occurred during HTML extraction: {e_general}"
-        logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
-        _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 중 예기치 않은 오류", state=states.FAILURE, exc=e_general, traceback_str=traceback.format_exc(), meta={'error_message': error_message, 'url': url})
-        # self.update_state(state=states.FAILURE, meta={'error': str(e_general), 'url': url})
-        raise Reject(error_message, requeue=False)
+        logger.info(f"{log_prefix} ---------- Task finished successfully. Result for log: {result_data_for_log} ----------") # 수정된 로깅
+        logger.debug(f"{log_prefix} Returning from step_1: keys={list(result_data.keys())}, page_content length: {len(result_data.get('page_content', '')) if result_data.get('page_content') else 0}")
+        return result_data
 
     except Reject as e_reject: # 명시적으로 Reject된 경우, Celery가 재시도 또는 실패 처리
         logger.warning(f"{log_prefix} Task explicitly rejected: {e_reject.reason}. Celery will handle retry/failure.")
-        _update_root_task_state(chain_log_id, f"(1_extract_html) 작업 명시적 거부: {e_reject.reason}", state=states.FAILURE, exc=e_reject, traceback_str=getattr(e_reject, 'traceback', None), meta={'error_message': str(e_reject.reason), 'reason_for_reject': getattr(e_reject, 'message', str(e_reject))}) # 상세 정보 추가
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            exc=e_reject, 
+            traceback_str=getattr(e_reject, 'traceback', traceback.format_exc()), # getattr로 traceback 우선 시도
+            meta={
+                'status_message': f"(1_extract_html) 작업 명시적 거부: {e_reject.reason}", 
+                'error_message': str(e_reject.reason), 
+                'reason_for_reject': getattr(e_reject, 'message', str(e_reject)), # getattr로 message 우선 시도
+                'current_task_id': str(task_id),
+                'pipeline_step': 'EXTRACT_HTML_REJECTED'
+            }
+        ) 
         raise # Celery가 처리하도록 re-raise
 
     except MaxRetriesExceededError as e_max_retries:
         error_message = "Max retries exceeded for HTML extraction."
         logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True) # exc_info=True 추가
-        _update_root_task_state(chain_log_id, "(1_extract_html) 최대 재시도 초과", state=states.FAILURE, exc=e_max_retries, traceback_str=traceback.format_exc(), meta={'error_message': error_message, 'original_exception': str(e_max_retries)})
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            exc=e_max_retries, 
+            traceback_str=traceback.format_exc(), 
+            meta={
+                'status_message': "(1_extract_html) 최대 재시도 초과", 
+                'error_message': error_message, 
+                'original_exception': str(e_max_retries),
+                'current_task_id': str(task_id),
+                'pipeline_step': 'EXTRACT_HTML_MAX_RETRIES'
+            }
+        )
         # self.update_state(state=states.FAILURE, meta={'error': error_message, 'original_exception': str(e_max_retries)})
         # MaxRetriesExceededError는 Celery에 의해 자동으로 전파되므로, 여기서 다시 raise할 필요는 없을 수 있으나,
         # 명시적으로 체인을 중단시키고 싶다면 raise하는 것이 안전합니다.
@@ -551,7 +633,18 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
         # 그럼에도 불구하고 여기까지 온 예외는 매우 예기치 않은 상황일 수 있습니다.
         error_message = f"Outer catch-all error in step_1_extract_html: {e_outer}"
         logger.critical(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
-        _update_root_task_state(chain_log_id, "(1_extract_html) 처리되지 않은 심각한 오류", state=states.FAILURE, exc=e_outer, traceback_str=traceback.format_exc(), meta={'error_message': error_message})
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            exc=e_outer, 
+            traceback_str=traceback.format_exc(), 
+            meta={
+                'status_message': "(1_extract_html) 처리되지 않은 심각한 오류", 
+                'error_message': error_message,
+                'current_task_id': str(task_id),
+                'pipeline_step': 'EXTRACT_HTML_CRITICAL_ERROR'
+            }
+        )
         # self.update_state(state=states.FAILURE, meta={'error': error_message})
         # 심각한 오류이므로, 재시도하지 않고 즉시 실패 처리하기 위해 Reject 사용 가능
         raise Reject(f"Critical unhandled error: {e_outer}", requeue=False)
@@ -569,7 +662,11 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
     if not isinstance(prev_result, dict) or 'page_content' not in prev_result or 'html_file_path' not in prev_result or 'original_url' not in prev_result:
         error_msg = f"Invalid or incomplete prev_result: {prev_result}. Expected a dict with 'page_content', 'html_file_path', and 'original_url'."
         logger.error(f"{log_prefix} {error_msg}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 오류: 이전 단계 결과 형식 오류", state=states.FAILURE, meta={'error': error_msg})
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            meta={'status_message': f"({step_log_id}) 오류: 이전 단계 결과 형식 오류", 'error': error_msg, 'current_task_id': task_id}
+        )
         raise ValueError(error_msg)
 
     html_content = prev_result.get('page_content')
@@ -586,7 +683,11 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
     if not html_content:
         error_msg = f"Page content is missing from previous step result: {prev_result.keys()}"
         logger.error(f"{log_prefix} {error_msg}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 이전 단계 HTML 내용 없음", state=states.FAILURE, meta={'error': error_msg})
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            meta={'status_message': f"({step_log_id}) 이전 단계 HTML 내용 없음", 'error': error_msg, 'current_task_id': task_id}
+        )
         raise ValueError(error_msg)
 
     # 다음 로직을 위한 extracted_text_file_path 초기화
@@ -603,7 +704,11 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
             base_html_fn_for_saving = re.sub(r'_raw_html_[a-f0-9]{8}_[a-f0-9]{8}$', '', base_html_fn_for_saving) # 고유 ID 패턴 수정
 
         logger.info(f"{log_prefix} Starting text extraction from page_content (length: {len(html_content)})")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) HTML 내용에서 텍스트 추출 시작", meta={'current_task_id': task_id})
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.STARTED,  # 파이프라인 진행 중
+            meta={'status_message': f"({step_log_id}) HTML 내용에서 텍스트 추출 시작", 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_STARTED'}
+        )
 
         # extracted_text_file_path = None # 초기화 (위로 이동)
         # html_content = page_content # 이미 html_content 변수에 할당되어 있음
@@ -720,7 +825,11 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         with open(extracted_text_file_path, "w", encoding="utf-8") as f:
             f.write(text)
         logger.info(f"{log_prefix} Text extracted and saved to: {extracted_text_file_path} (Final Length: {len(text)})")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 파일 저장 완료", meta={'text_file_path': extracted_text_file_path})
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.STARTED, # 파이프라인 진행 중
+            meta={'status_message': f"({step_log_id}) 텍스트 파일 저장 완료", 'text_file_path': extracted_text_file_path, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_COMPLETED'}
+        )
         
         result_to_return = {"text_file_path": extracted_text_file_path, 
                              "original_url": original_url, 
@@ -734,12 +843,24 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
     except FileNotFoundError as e_fnf:
         logger.error(f"{log_prefix} FileNotFoundError during text extraction: {e_fnf}. HTML file path: {html_file_path}", exc_info=True)
         err_details_fnf = {'error': str(e_fnf), 'type': type(e_fnf).__name__, 'html_file': str(html_file_path)}
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 추출 실패 (파일 없음)", state=states.FAILURE, exc=e_fnf, traceback_str=traceback.format_exc(), meta=err_details_fnf)
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            exc=e_fnf, 
+            traceback_str=traceback.format_exc(), 
+            meta={'status_message': f"({step_log_id}) 텍스트 추출 실패 (파일 없음)", **err_details_fnf, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_FAILED'}
+        )
         raise # Celery가 태스크를 실패로 처리하도록 함
     except IOError as e_io:
         logger.error(f"{log_prefix} IOError during text extraction: {e_io}. HTML file path: {html_file_path}", exc_info=True)
         err_details_io = {'error': str(e_io), 'type': type(e_io).__name__, 'html_file': str(html_file_path), 'traceback': traceback.format_exc()}
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 추출 실패 (IO 오류)", status=states.FAILURE, error_info=err_details_io)
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            exc=e_io, 
+            traceback_str=traceback.format_exc(), 
+            meta={'status_message': f"({step_log_id}) 텍스트 추출 실패 (IO 오류)", **err_details_io, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_FAILED'}
+        )
         raise
     except Exception as e_general:
         logger.error(f"{log_prefix} General error during text extraction from {html_file_path}: {e_general}", exc_info=True)
@@ -751,7 +872,13 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
                 logger.warning(f"{log_prefix} Failed to remove partial text file {extracted_text_file_path}: {e_remove}", exc_info=True)
         
         err_details_general = {'error': str(e_general), 'type': type(e_general).__name__, 'html_file': str(html_file_path), 'traceback': traceback.format_exc()}
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 텍스트 추출 중 알 수 없는 오류", status=states.FAILURE, error_info=err_details_general)
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            exc=e_general, 
+            traceback_str=traceback.format_exc(), 
+            meta={'status_message': f"({step_log_id}) 텍스트 추출 중 알 수 없는 오류", **err_details_general, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_FAILED'}
+        )
         raise
     finally:
         logger.info(f"{log_prefix} ---------- Task execution attempt ended. ----------")
@@ -767,7 +894,11 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
     if not isinstance(prev_result, dict) or "extracted_text" not in prev_result:
         error_msg = f"Invalid or incomplete prev_result: {prev_result}. Expected a dict with 'extracted_text'."
         logger.error(f"{log_prefix} {error_msg}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 오류: 이전 단계 결과 형식 오류 ('extracted_text' 누락)", status=states.FAILURE, error_info={'error': error_msg})
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            meta={'status_message': f"({step_log_id}) 오류: 이전 단계 결과 형식 오류 ('extracted_text' 누락)", 'error': error_msg, 'current_task_id': task_id}
+        )
         raise ValueError(error_msg)
         
     raw_text_file_path = prev_result.get("text_file_path") # 파일명 생성 및 로깅용
@@ -778,7 +909,11 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
     if not extracted_text:
         error_msg = f"Extracted text is missing from previous step result: {prev_result.keys()}"
         logger.error(f"{log_prefix} {error_msg}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 이전 단계 텍스트 내용 없음", status=states.FAILURE, error_info={'error': error_msg})
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            meta={'status_message': f"({step_log_id}) 이전 단계 텍스트 내용 없음", 'error': error_msg, 'current_task_id': task_id}
+        )
         raise ValueError(error_msg)
 
     # raw_text_file_path는 파일 저장 시 이름 기반으로 사용될 수 있으므로 유효성 검사 또는 생성 로직 필요
@@ -789,7 +924,11 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
         base_text_fn_for_saving = os.path.splitext(os.path.basename(raw_text_file_path))[0].replace("_extracted_text","")
 
     logger.info(f"{log_prefix} Starting LLM filtering for text (length: {len(extracted_text)}). Associated raw_text_file_path for logging: {raw_text_file_path}")
-    _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 채용공고 필터링 시작", details={'current_task_id': task_id})
+    _update_root_task_state(
+        chain_log_id, 
+        state=states.STARTED, # 파이프라인 진행 중
+        meta={'status_message': f"({step_log_id}) LLM 채용공고 필터링 시작", 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_STARTED'}
+    )
 
     filtered_text_file_path = None
     raw_text = extracted_text # 파일에서 읽는 대신 직접 사용
@@ -807,7 +946,11 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
             groq_api_key = os.getenv("GROQ_API_KEY")
             if not groq_api_key:
                 logger.error(f"{log_prefix} GROQ_API_KEY not set.")
-                _update_root_task_state(chain_log_id, f"({step_log_id}) API 키 없음 (GROQ_API_KEY)", status=states.FAILURE, error_info={'error': 'GROQ_API_KEY not set'})
+                _update_root_task_state(
+                    chain_log_id, 
+                    state=states.FAILURE, 
+                    meta={'status_message': f"({step_log_id}) API 키 없음 (GROQ_API_KEY)", 'error': 'GROQ_API_KEY not set', 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_FAILED'}
+                )
                 raise ValueError("GROQ_API_KEY is not configured.")
 
             # 중요: LLM 모델은 아래 명시된 모델을 사용해야 합니다. 변경하지 마십시오.
@@ -836,8 +979,17 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
             if len(raw_text) > MAX_LLM_INPUT_LEN:
                 logger.warning(f"{log_prefix} Text length ({len(raw_text)}) > limit ({MAX_LLM_INPUT_LEN}). Truncating.")
                 text_for_llm = raw_text[:MAX_LLM_INPUT_LEN]
-                _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 입력 텍스트 일부 사용 (길이 초과)", 
-                                        details={'original_len': len(raw_text), 'truncated_len': len(text_for_llm)})
+                _update_root_task_state(
+                    chain_log_id, 
+                    state=states.STARTED, # 여전히 진행 중 상태, 경고성 메타 추가
+                    meta={
+                        'status_message': f"({step_log_id}) LLM 입력 텍스트 일부 사용 (길이 초과)", 
+                        'original_len': len(raw_text), 
+                        'truncated_len': len(text_for_llm),
+                        'current_task_id': task_id,
+                        'pipeline_step': 'CONTENT_FILTERING_INPUT_TRUNCATED'
+                    }
+                )
             
             logger.info(f"{log_prefix} Text length for LLM: {len(text_for_llm)}")
             logger.debug(f"{log_prefix} Text for LLM (first 500 chars): {text_for_llm[:500]}")
@@ -857,7 +1009,13 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
                 # 또는 여기서 특정 오류 메시지를 포함한 결과로 바로 반환할 수도 있음.
                 # 현재는 전역 예외 처리 로직으로 넘기기 위해 raise.
                 err_details_invoke = {'error': str(e_llm_invoke), 'type': type(e_llm_invoke).__name__, 'traceback': traceback.format_exc(), 'context': 'llm_chain.invoke'}
-                _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 호출 실패", status=states.FAILURE, error_info=err_details_invoke)
+                _update_root_task_state(
+                    chain_log_id, 
+                    state=states.FAILURE, 
+                    exc=e_llm_invoke, 
+                    traceback_str=traceback.format_exc(), 
+                    meta={'status_message': f"({step_log_id}) LLM 호출 실패", **err_details_invoke, 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_FAILED'}
+                )
                 raise # Celery가 이 태스크를 실패로 처리하고, 설정에 따라 재시도하거나 파이프라인을 중단하도록 함.
 
             if filtered_content.strip() == "추출할 채용공고 내용 없음":
@@ -875,7 +1033,16 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
         with open(filtered_text_file_path, "w", encoding="utf-8") as f:
             f.write(filtered_content)
         logger.info(f"{log_prefix} Filtered text saved to: {filtered_text_file_path}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) 필터링된 텍스트 파일 저장 완료", details={'filtered_text_file_path': filtered_text_file_path})
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.STARTED, # 파이프라인 진행 중
+            meta={
+                'status_message': f"({step_log_id}) 필터링된 텍스트 파일 저장 완료", 
+                'filtered_text_file_path': filtered_text_file_path, 
+                'current_task_id': task_id, 
+                'pipeline_step': 'CONTENT_FILTERING_COMPLETED'
+            }
+        )
 
         result_to_return = {"filtered_text_file_path": filtered_text_file_path, 
                              "original_url": original_url, 
@@ -898,7 +1065,13 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
 
         err_details = {'error': str(e), 'type': type(e).__name__, 'filtered_file': raw_text_file_path, 'traceback': traceback.format_exc()}
         logger.error(f"{log_prefix} Attempting to update root task {chain_log_id} with pipeline FAILURE status due to exception. Error details: {err_details}")
-        _update_root_task_state(chain_log_id, f"({step_log_id}) LLM 필터링 실패", status=states.FAILURE, error_info=err_details)
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.FAILURE, 
+            exc=e, 
+            traceback_str=traceback.format_exc(), 
+            meta={'status_message': f"({step_log_id}) LLM 필터링 실패", **err_details, 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_FAILED'}
+        )
         logger.error(f"{log_prefix} Root task {chain_log_id} updated with pipeline FAILURE status.")
         raise # 파이프라인 실패
 
@@ -920,12 +1093,31 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         error_message = "filtered_content is missing from previous result."
         logger.error(f"{log_prefix} {error_message}")
         # 이 단계에서 실패를 기록하고, 파이프라인의 최종 결과에 반영되도록 예외를 발생시킵니다.
-        # _update_root_task_state(root_task_id, current_step_message=f"(4_generate_cover_letter) 실패: {error_message}", status=states.FAILURE, error_info={'error': error_message, 'details': 'Filtered content was not provided by step 3.'})
+        _update_root_task_state(
+            root_task_id, 
+            state=states.FAILURE, 
+            meta={
+                'status_message': f"(4_generate_cover_letter) 실패: {error_message}", 
+                'error': error_message, 
+                'details': 'Filtered content was not provided by step 3.', 
+                'current_task_id': task_id,
+                'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'
+            }
+        )
         raise ValueError(error_message)
 
     try:
         logger.info(f"{log_prefix} Starting cover letter generation. Filtered text length: {len(filtered_content)}, User prompt: {'Yes' if user_prompt_text else 'No'}. Associated filtered_text_file_path for logging: {filtered_text_file_path}")
-        # _update_root_task_state(root_task_id, current_step_message="(4_generate_cover_letter) 자기소개서 생성 시작", details={'user_prompt': bool(user_prompt_text), 'current_task_id': task_id})
+        _update_root_task_state(
+            root_task_id, 
+            state=states.STARTED, # 파이프라인 진행 중
+            meta={
+                'status_message': "(4_generate_cover_letter) 자기소개서 생성 시작", 
+                'user_prompt': bool(user_prompt_text), 
+                'current_task_id': task_id,
+                'pipeline_step': 'COVER_LETTER_GENERATION_STARTED'
+            }
+        )
 
         # generate_cover_letter 함수는 (raw_cv_text, formatted_cv_text) 튜플을 반환합니다.
         # llm_model_used는 generate_cover_letter_semantic 내에서 고정되어 있거나 로깅되므로, 여기서 직접 받지 않습니다.
@@ -945,7 +1137,17 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         if not raw_cv_text or not formatted_cv_text:
             error_message = "LLM generated an empty cover letter."
             logger.error(f"{log_prefix} {error_message}")
-            # _update_root_task_state(root_task_id, current_step_message=f"(4_generate_cover_letter) 실패: {error_message}", status=states.FAILURE, error_info={'error': error_message, 'details': 'LLM returned empty content for cover letter.'})
+            _update_root_task_state(
+                root_task_id, 
+                state=states.FAILURE, 
+                meta={
+                    'status_message': f"(4_generate_cover_letter) 실패: {error_message}", 
+                    'error': error_message, 
+                    'details': 'LLM returned empty content for cover letter.', 
+                    'current_task_id': task_id,
+                    'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'
+                }
+            )
             raise ValueError(error_message)
 
         logger.info(f"{log_prefix} Successfully unpacked cover letter data. Raw length: {len(raw_cv_text)}, Formatted length: {len(formatted_cv_text)}")
@@ -984,7 +1186,19 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         except IOError as e_io:
             error_message = f"Failed to save cover letter to file: {e_io}"
             logger.error(f"{log_prefix} {error_message}", exc_info=True)
-            # _update_root_task_state(root_task_id, current_step_message=f"(4_generate_cover_letter) 실패: {error_message}", status=states.FAILURE, error_info={'error': error_message, 'file_path': cover_letter_file_path})
+            _update_root_task_state(
+                root_task_id, 
+                state=states.FAILURE, 
+                exc=e_io, 
+                traceback_str=traceback.format_exc(), 
+                meta={
+                    'status_message': f"(4_generate_cover_letter) 실패: {error_message}", 
+                    'error': error_message, 
+                    'file_path': cover_letter_file_path, 
+                    'current_task_id': task_id,
+                    'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'
+                }
+            )
             raise # 예외를 다시 발생시켜 Celery가 처리하도록 함
 
         # 최종 결과 구성
@@ -1015,8 +1229,20 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
 
     except ValueError as e_val: # 직접 발생시킨 예외
         logger.error(f"{log_prefix} ValueError in step 4: {e_val}", exc_info=True)
-        # _update_root_task_state(root_task_id, current_step_message=f"(4_generate_cover_letter) 실패: {str(e_val)}", status=states.FAILURE, error_info={'error': str(e_val), 'type': 'ValueError'})
-        self.update_state(state=states.FAILURE, meta={'error': str(e_val), 'step': '4_generate_cover_letter', 'type': 'ValueError', 'task_id': task_id, 'root_task_id': root_task_id})
+        _update_root_task_state(
+            root_task_id, 
+            state=states.FAILURE, 
+            exc=e_val, 
+            traceback_str=traceback.format_exc(), 
+            meta={
+                'status_message': f"(4_generate_cover_letter) 실패: {str(e_val)}", 
+                'error': str(e_val), 
+                'type': 'ValueError', 
+                'current_task_id': task_id,
+                'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'
+            }
+        )
+        # self.update_state(state=states.FAILURE, meta={'error': str(e_val), 'step': '4_generate_cover_letter', 'type': 'ValueError', 'task_id': task_id, 'root_task_id': root_task_id})
         # 중요: 파이프라인의 일부로 실행될 때, 여기서 예외를 발생시키면 체인이 중단됨.
         #       이는 의도된 동작일 수 있음. propagate=True로 호출되면 예외가 전파됨.
         raise Reject(f"Step 4 failed due to ValueError: {e_val}", requeue=False)
@@ -1024,16 +1250,41 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
     except MaxRetriesExceededError as e_max_retries:
         error_message = f"Max retries exceeded for LLM call: {e_max_retries}"
         logger.error(f"{log_prefix} {error_message}", exc_info=True)
-        # _update_root_task_state(root_task_id, current_step_message=f"(4_generate_cover_letter) 실패: {error_message}", status=states.FAILURE, error_info={'error': error_message, 'type': 'MaxRetriesExceededError'})
-        self.update_state(state=states.FAILURE, meta={'error': error_message, 'step': '4_generate_cover_letter', 'type': 'MaxRetriesExceededError', 'task_id': task_id, 'root_task_id': root_task_id})
+        _update_root_task_state(
+            root_task_id, 
+            state=states.FAILURE, 
+            exc=e_max_retries, 
+            traceback_str=traceback.format_exc(), 
+            meta={
+                'status_message': f"(4_generate_cover_letter) 실패: {error_message}", 
+                'error': error_message, 
+                'type': 'MaxRetriesExceededError', 
+                'current_task_id': task_id,
+                'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'
+            }
+        )
+        # self.update_state(state=states.FAILURE, meta={'error': error_message, 'step': '4_generate_cover_letter', 'type': 'MaxRetriesExceededError', 'task_id': task_id, 'root_task_id': root_task_id})
         raise Reject(f"Step 4 failed due to MaxRetriesExceededError: {e_max_retries}", requeue=False)
         
     except Exception as e_gen:
         error_message = f"Unexpected error in cover letter generation: {e_gen}"
         detailed_error_info = get_detailed_error_info(e_gen)
         logger.error(f"{log_prefix} {error_message}", exc_info=True)
-        # _update_root_task_state(root_task_id, current_step_message=f"(4_generate_cover_letter) 실패: {error_message}", status=states.FAILURE, error_info={'error': error_message, 'type': str(type(e_gen).__name__), 'details': detailed_error_info})
-        self.update_state(state=states.FAILURE, meta={'error': error_message, 'step': '4_generate_cover_letter', 'type': str(type(e_gen).__name__), 'details': detailed_error_info, 'task_id': task_id, 'root_task_id': root_task_id})
+        _update_root_task_state(
+            root_task_id, 
+            state=states.FAILURE, 
+            exc=e_gen, 
+            traceback_str=traceback.format_exc(), 
+            meta={
+                'status_message': f"(4_generate_cover_letter) 실패: {error_message}", 
+                'error': error_message, 
+                'type': str(type(e_gen).__name__), 
+                'details': detailed_error_info, 
+                'current_task_id': task_id,
+                'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'
+            }
+        )
+        # self.update_state(state=states.FAILURE, meta={'error': error_message, 'step': '4_generate_cover_letter', 'type': str(type(e_gen).__name__), 'details': detailed_error_info, 'task_id': task_id, 'root_task_id': root_task_id})
         # 일반적인 오류 발생 시에도 Reject를 사용하여 Celery가 실패로 처리하도록 함
         raise Reject(f"Step 4 failed due to an unexpected error: {e_gen}", requeue=False)
     finally:
@@ -1058,7 +1309,12 @@ def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str
     # Celery 앱 인스턴스를 통해 backend에 직접 접근하여 상태를 설정할 수도 있으나,
     # 일반적으로 작업이 제출되면 Celery에 의해 PENDING 상태가 됩니다.
     # 여기서는 _update_root_task_state를 사용하여 명시적으로 'STARTED' 상태와 메타데이터를 설정합니다.
-    initial_meta = {'job_posting_url': job_posting_url, 'root_task_id': root_task_id, 'status_message': '파이프라인 시작됨'}
+    initial_meta = {
+        'job_posting_url': job_posting_url, 
+        'root_task_id': root_task_id, 
+        'status_message': '파이프라인 시작됨',
+        'pipeline_status': 'INITIALIZING' # 파이프라인 전체 상태 추적용
+    }
     _update_root_task_state(root_task_id, state='STARTED', meta=initial_meta)
 
 
@@ -1122,6 +1378,7 @@ def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str
             'details': detailed_error_info,
             'root_task_id': root_task_id,
             'job_posting_url': job_posting_url,
+            'pipeline_status': 'SETUP_FAILURE' # 파이프라인 전체 상태 추적용
         }
         _update_root_task_state(root_task_id, state=states.FAILURE, meta=failure_meta, exc=e_pipeline_setup, traceback_str=traceback.format_exc())
         # 이 경우, 함수는 root_task_id를 반환하지만, 해당 ID의 상태는 FAILURE로 설정됩니다.
@@ -1149,7 +1406,12 @@ def handle_pipeline_completion(result_or_request_obj, root_task_id: str, is_succ
 
         if isinstance(final_result_from_chain, dict) and final_result_from_chain.get('status') == 'SUCCESS':
             # 최종 상태를 SUCCESS로 업데이트하고, step_4의 결과를 meta에 저장
-            _update_root_task_state(root_task_id, state=states.SUCCESS, meta=final_result_from_chain)
+            success_meta = {
+                **final_result_from_chain, # step_4 결과 전체 포함
+                'status_message': '파이프라인 성공적으로 완료',
+                'pipeline_status': 'COMPLETED_SUCCESS' # 파이프라인 전체 상태
+            }
+            _update_root_task_state(root_task_id, state=states.SUCCESS, meta=success_meta)
             logger.info(f"{log_prefix} Root task {root_task_id} marked as SUCCESS with final results.")
         else:
             error_message = "Pipeline chain reported success, but the final result format was unexpected or indicated an internal issue in step 4."
@@ -1159,6 +1421,7 @@ def handle_pipeline_completion(result_or_request_obj, root_task_id: str, is_succ
                 'error': error_message,
                 'details': str(final_result_from_chain),
                 'root_task_id': root_task_id,
+                'pipeline_status': 'COMPLETION_FAILURE_UNEXPECTED_FORMAT' # 파이프라인 전체 상태
             }
             if isinstance(final_result_from_chain, dict):
                  failure_meta.update(final_result_from_chain)
@@ -1188,6 +1451,7 @@ def handle_pipeline_completion(result_or_request_obj, root_task_id: str, is_succ
                 'error': 'An unspecified error occurred within the pipeline chain.',
                 'details': 'Failure detected by link_error callback.',
                 'root_task_id': root_task_id,
+                'pipeline_status': 'COMPLETION_FAILURE_CALLBACK_DETECTED' # 파이프라인 전체 상태
             }
             # result_or_request_obj가 Exception 객체인지 확인하여 exc 인자로 전달 시도
             final_exc = None
