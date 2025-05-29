@@ -142,7 +142,7 @@ This project uses Google Cloud Build for its CI/CD pipeline.
         *   `UPSTASH_REDIS_PASSWORD` (The password for your Upstash Redis instance, latest version)
     7.  Service Account: Utilizes a dedicated service account with least-privilege permissions. Ensure this service account (or the default Compute Engine service account if no specific service account is set for the Cloud Run service) has the "Secret Manager Secret Accessor" (roles/secretmanager.secretAccessor) role to access the secrets specified.
 
-## �� Project Structure
+## 📄 Project Structure
 
 ```
 .
@@ -158,6 +158,7 @@ This project uses Google Cloud Build for its CI/CD pipeline.
 ├── generate_cover_letter_semantic.py # Script for generating cover letters using RAG and Groq API
 ├── logs/             # Directory for local application logs and generated files (mounted as a volume in local Docker Compose setup). In Cloud Run, logs are directed to Cloud Logging.
 ├── LICENSE           # License file (CC BY NC 4.0)
+├── README.md         # English README file (This file)
 ├── README_ko.md      # Korean README file
 ```
 

@@ -29,7 +29,7 @@
 
 ### 생성형 AI 및 고급 텍스트 처리
 
-- **거대 언어 모델(LLM) 통합**: `Langchain`을 사용하여 `Groq API` (기존 `Gemini API`)를 호출합니다. 사용자 제공 정보를 기반으로 자연스러운 자기소개서 초안을 생성합니다.
+- **거대 언어 모델(LLM) 통합**: `langchain_groq`의 `ChatGroq`를 사용하여 `Groq API`를 호출합니다. 이는 자기소개서와 같이 애플리케이션별 텍스트를 생성하는 데 사용됩니다. `generate_cover_letter_semantic.py` 스크립트는 LLM에 문맥적으로 관련된 정보를 제공하여 원하는 결과물을 생성하는 방법을 보여줍니다.
 - **검색 증강 생성(RAG)**: Langchain을 사용하여 RAG 파이프라인을 구현하여 자기소개서 생성과 같은 작업에 대한 LLM의 컨텍스트 이해를 향상시킵니다. `generate_cover_letter_semantic.py`에 자세히 설명된 이 프로세스에는 다음이 포함됩니다.
     - 소스 문서 로드 (예: `logs/` 디렉토리의 채용 공고 텍스트).
     - 텍스트를 관리 가능한 조각으로 청킹 ( `langchain_experimental.text_splitter`의 `SemanticChunker` 또는 `langchain.text_splitter`의 `RecursiveCharacterTextSplitter` 사용).
@@ -134,7 +134,7 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
         *   `UPSTASH_REDIS_PASSWORD` (Upstash Redis 인스턴스의 비밀번호, 최신 버전)
     7.  서비스 계정: 최소 권한 원칙에 따른 전용 서비스 계정을 활용합니다. 이 서비스 계정(또는 Cloud Run 서비스에 특정 서비스 계정이 설정되지 않은 경우 기본 Compute Engine 서비스 계정)에 지정된 보안 비밀에 접근하기 위한 "Secret Manager 비밀 접근자"(roles/secretmanager.secretAccessor) 역할이 부여되었는지 확인하십시오.
 
-## 📁 프로젝트 구조
+## 📄 프로젝트 구조
 
 ```
 .
@@ -151,6 +151,7 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
 ├── logs/             # 로컬 애플리케이션 로그 및 생성된 파일 디렉토리 (로컬 Docker Compose 설정에서 볼륨으로 마운트됨). Cloud Run에서는 로그가 Cloud Logging으로 전송됩니다.
 ├── LICENSE           # 라이선스 파일 (CC BY NC 4.0)
 ├── README.md         # 영문 README 파일
+├── README_ko.md      # 한글 README 파일 (현재 파일)
 ```
 
 ## 📄 라이선스
