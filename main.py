@@ -28,6 +28,8 @@ app = FastAPI()
 
 # CORS 미들웨어 추가 시작
 origins = [
+    "http://localhost:8000", # 클라이언트 개발 서버 주소
+    "http://127.0.0.1:8000", # localhost의 IP 주소 버전도 추가
     "*", # 모든 출처 허용 (테스트 목적)
     # "http://cvfactory.dev",
     # "https://cvfactory.dev", # HTTPS도 고려
