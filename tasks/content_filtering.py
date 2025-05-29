@@ -54,6 +54,7 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
         base_text_fn_for_saving = os.path.splitext(os.path.basename(raw_text_file_path))[0].replace("_extracted_text","")
 
     logger.info(f"{log_prefix} Starting LLM filtering for text (length: {len(extracted_text)}). Associated raw_text_file_path for logging: {raw_text_file_path}")
+    self.update_state(state='PROGRESS', meta={'current_step': '채용공고 내용 필터링을 준비 중입니다.', 'percentage': 0, 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_STARTED'})
     _update_root_task_state(
         root_task_id=chain_log_id, 
         state=states.STARTED,
@@ -61,7 +62,8 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
             'current_step': '추출된 텍스트에서 핵심 채용공고 내용을 선별하고 있습니다...',
             'status_message': f"({step_log_id}) LLM 채용공고 필터링 시작", 
             'current_task_id': task_id, 
-            'pipeline_step': 'CONTENT_FILTERING_STARTED'
+            'pipeline_step': 'CONTENT_FILTERING_STARTED',
+            'percentage': 5 # 예시 진행률
         }
     )
 
@@ -122,6 +124,19 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
             logger.info(f"{log_prefix} Text length for LLM: {len(text_for_llm)}")
             logger.debug(f"{log_prefix} Text for LLM (first 500 chars): {text_for_llm[:500]}")
 
+            self.update_state(state='PROGRESS', meta={'current_step': 'LLM을 통해 채용공고 핵심 내용을 분석 중입니다...', 'percentage': 30, 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_LLM_INVOKE'})
+            _update_root_task_state(
+                root_task_id=chain_log_id,
+                state=states.STARTED,
+                meta={
+                    'current_step': 'LLM을 통해 채용공고 핵심 내용을 분석하고 있습니다. 시간이 다소 소요될 수 있습니다.',
+                    'status_message': f"({step_log_id}) LLM 호출 중",
+                    'current_task_id': task_id,
+                    'pipeline_step': 'CONTENT_FILTERING_LLM_INVOKE',
+                    'percentage': 35 # 예시 진행률
+                }
+            )
+
             try:
                 logger.info(f"{log_prefix} >>> Attempting llm_chain.invoke NOW...")
                 start_time_llm_invoke = time.time()
@@ -131,9 +146,22 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
                 logger.info(f"{log_prefix} <<< llm_chain.invoke completed. Duration: {duration_llm_invoke:.2f} seconds.")
                 logger.info(f"{log_prefix} LLM filtering complete. Output length: {len(filtered_content)}")
                 logger.debug(f"{log_prefix} Filtered content (first 500 chars): {filtered_content[:500]}")
+                self.update_state(state='PROGRESS', meta={'current_step': '채용공고 핵심 내용 분석 완료. 결과를 저장합니다.', 'percentage': 70, 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_LLM_COMPLETED'})
+                _update_root_task_state(
+                    root_task_id=chain_log_id,
+                    state=states.STARTED,
+                    meta={
+                        'current_step': '채용공고 핵심 내용 분석이 완료되었습니다. 결과를 저장하고 다음 단계를 준비합니다.',
+                        'status_message': f"({step_log_id}) LLM 분석 완료",
+                        'current_task_id': task_id,
+                        'pipeline_step': 'CONTENT_FILTERING_LLM_COMPLETED',
+                        'percentage': 75 # 예시 진행률
+                    }
+                )
             except Exception as e_llm_invoke:
                 logger.error(f"{log_prefix} !!! EXCEPTION during llm_chain.invoke: {type(e_llm_invoke).__name__} - {str(e_llm_invoke)}", exc_info=True)
                 err_details_invoke = {'error': str(e_llm_invoke), 'type': type(e_llm_invoke).__name__, 'traceback': traceback.format_exc(), 'context': 'llm_chain.invoke'}
+                self.update_state(state=states.FAILURE, meta={'current_step': '오류: LLM 채용공고 분석 중 문제가 발생했습니다.', 'error': str(e_llm_invoke), 'type': type(e_llm_invoke).__name__, 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_FAILED'})
                 _update_root_task_state(
                     root_task_id=chain_log_id, 
                     state=states.FAILURE, 
@@ -156,15 +184,17 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
         with open(filtered_text_file_path, "w", encoding="utf-8") as f:
             f.write(filtered_content)
         logger.info(f"{log_prefix} Filtered text saved to: {filtered_text_file_path}")
+        self.update_state(state='PROGRESS', meta={'current_step': '분석된 채용공고 내용을 안전하게 저장했습니다.', 'percentage': 90, 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_SAVED'})
         _update_root_task_state(
             root_task_id=chain_log_id,
-            state=states.STARTED,
+            state=states.STARTED, # SUCCESS 전 마지막 PROGRESS 상태로 간주
             meta={
                 'current_step': '핵심 채용공고 내용 선별 완료. 자기소개서 생성을 준비합니다...',
                 'status_message': f"({step_log_id}) 필터링된 텍스트 파일 저장 완료", 
                 'filtered_text_file_path': filtered_text_file_path, 
                 'current_task_id': task_id, 
-                'pipeline_step': 'CONTENT_FILTERING_COMPLETED'
+                'pipeline_step': 'CONTENT_FILTERING_COMPLETED',
+                'percentage': 95 # 예시 진행률
             }
         )
 
@@ -179,6 +209,7 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
                             }
         logger.info(f"{log_prefix} ---------- Task finished successfully. Returning result. ----------")
         logger.debug(f"{log_prefix} Returning from step_3: {result_to_return.keys()}, filtered_content length: {len(filtered_content)}")
+        self.update_state(state=states.SUCCESS, meta={**result_to_return, 'current_step': '채용공고 내용 필터링이 성공적으로 완료되었습니다.', 'percentage': 100, 'pipeline_step': 'CONTENT_FILTERING_SUCCESS'})
         return result_to_return
 
     except Exception as e:
@@ -189,6 +220,7 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
 
         err_details = {'error': str(e), 'type': type(e).__name__, 'filtered_file': raw_text_file_path, 'traceback': traceback.format_exc()}
         logger.error(f"{log_prefix} Attempting to update root task {chain_log_id} with pipeline FAILURE status due to exception. Error details: {err_details}")
+        self.update_state(state=states.FAILURE, meta={'current_step': '오류: 채용공고 내용 필터링 중 예기치 않은 문제가 발생했습니다.', **err_details, 'current_task_id': task_id, 'pipeline_step': 'CONTENT_FILTERING_FAILED'})
         _update_root_task_state(
             root_task_id=chain_log_id, 
             state=states.FAILURE, 

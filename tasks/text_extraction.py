@@ -61,6 +61,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
             base_html_fn_for_saving = re.sub(r'_raw_html_[a-f0-9]{8}_[a-f0-9]{8}$', '', base_html_fn_for_saving)
 
         logger.info(f"{log_prefix} Starting text extraction from page_content (length: {len(html_content)})")
+        self.update_state(state='PROGRESS', meta={'current_step': '텍스트 추출을 준비 중입니다.', 'percentage': 0, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_STARTED'})
         _update_root_task_state(
             root_task_id=chain_log_id, 
             state=states.STARTED,
@@ -68,15 +69,41 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
                 'current_step': '추출된 HTML 내용에서 텍스트 정보를 분석하고 있습니다...',
                 'status_message': f"({step_log_id}) HTML 내용에서 텍스트 추출 시작", 
                 'current_task_id': task_id, 
-                'pipeline_step': 'TEXT_EXTRACTION_STARTED'
+                'pipeline_step': 'TEXT_EXTRACTION_STARTED',
+                'percentage': 5 # 예시 진행률
             }
         )
 
         logger.debug(f"{log_prefix} HTML content from prev_result successfully received (length verified as {len(html_content)}).")
         
         logger.debug(f"{log_prefix} Initializing BeautifulSoup parser.")
+        self.update_state(state='PROGRESS', meta={'current_step': 'HTML 분석기를 초기화하고 있습니다.', 'percentage': 10, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_BS_INIT'})
+        _update_root_task_state(
+            root_task_id=chain_log_id,
+            state=states.STARTED,
+            meta={
+                'current_step': 'HTML 구조 분석을 준비하고 있습니다...',
+                'status_message': f"({step_log_id}) HTML 파서 초기화 중",
+                'current_task_id': task_id,
+                'pipeline_step': 'TEXT_EXTRACTION_BS_INIT',
+                'percentage': 12 # 예시 진행률
+            }
+        )
         soup = BeautifulSoup(html_content, "html.parser")
         logger.info(f"{log_prefix} BeautifulSoup initialized.")
+
+        self.update_state(state='PROGRESS', meta={'current_step': 'HTML에서 불필요한 태그(스크립트, 스타일 등)를 제거 중입니다...', 'percentage': 20, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_TAG_CLEANUP'})
+        _update_root_task_state(
+            root_task_id=chain_log_id,
+            state=states.STARTED,
+            meta={
+                'current_step': 'HTML 문서 정제 중 (스크립트, 스타일 제거 등)...',
+                'status_message': f"({step_log_id}) 불필요 태그 제거 중",
+                'current_task_id': task_id,
+                'pipeline_step': 'TEXT_EXTRACTION_TAG_CLEANUP',
+                'percentage': 22 # 예시 진행률
+            }
+        )
 
         logger.debug(f"{log_prefix} Removing comments.")
         comments_removed_count = 0
@@ -95,6 +122,19 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         logger.info(f"{log_prefix} Decomposed {decomposed_tags_count} unwanted tags ({tags_to_decompose}).")
         
         target_soup_object = soup
+
+        self.update_state(state='PROGRESS', meta={'current_step': '정제된 HTML에서 텍스트를 추출하고 있습니다...', 'percentage': 40, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_GET_TEXT'})
+        _update_root_task_state(
+            root_task_id=chain_log_id,
+            state=states.STARTED,
+            meta={
+                'current_step': '정제된 HTML에서 주요 텍스트를 추출합니다...',
+                'status_message': f"({step_log_id}) 텍스트 추출 중",
+                'current_task_id': task_id,
+                'pipeline_step': 'TEXT_EXTRACTION_GET_TEXT',
+                'percentage': 42 # 예시 진행률
+            }
+        )
 
         logger.debug(f"{log_prefix} Extracting text with target_soup_object.get_text().")
         text = target_soup_object.get_text(separator="\n", strip=True)
@@ -137,6 +177,19 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
             logger.info(f"{log_prefix} Single line text was empty, skipping 50-char formatting.")
             text_formatted = text_single_line
 
+        self.update_state(state='PROGRESS', meta={'current_step': '추출된 텍스트 정제 작업이 완료되었습니다. 결과를 저장합니다.', 'percentage': 70, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_FORMATTING_DONE'})
+        _update_root_task_state(
+            root_task_id=chain_log_id,
+            state=states.STARTED,
+            meta={
+                'current_step': '추출된 텍스트의 줄바꿈 및 공백을 최종 정리했습니다...',
+                'status_message': f"({step_log_id}) 텍스트 포맷팅 완료",
+                'current_task_id': task_id,
+                'pipeline_step': 'TEXT_EXTRACTION_FORMATTING_DONE',
+                'percentage': 72 # 예시 진행률
+            }
+        )
+
         text = text_formatted
         logger.debug(f"{log_prefix} Final extracted text for saving (first 500 chars): {text[:500]}")
 
@@ -157,15 +210,17 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
         with open(extracted_text_file_path, "w", encoding="utf-8") as f:
             f.write(text)
         logger.info(f"{log_prefix} Text extracted and saved to: {extracted_text_file_path} (Final Length: {len(text)}) ")
+        self.update_state(state='PROGRESS', meta={'current_step': '추출된 텍스트를 안전하게 저장했습니다.', 'percentage': 90, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_SAVED'})
         _update_root_task_state(
             root_task_id=chain_log_id,
-            state=states.STARTED,
+            state=states.STARTED, # SUCCESS 전 마지막 PROGRESS
             meta={
                 'current_step': '텍스트 추출 완료. 불필요한 내용 필터링을 준비 중입니다...',
                 'status_message': f"({step_log_id}) 텍스트 파일 저장 완료", 
                 'text_file_path': extracted_text_file_path, 
                 'current_task_id': task_id, 
-                'pipeline_step': 'TEXT_EXTRACTION_COMPLETED'
+                'pipeline_step': 'TEXT_EXTRACTION_COMPLETED',
+                'percentage': 95 # 예시 진행률
             }
         )
         
@@ -176,11 +231,13 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
                             }
         logger.info(f"{log_prefix} ---------- Task finished successfully. Returning result. ----------")
         logger.debug(f"{log_prefix} Returning from step_2: {result_to_return.keys()}, extracted_text length: {len(text)}")
+        self.update_state(state=states.SUCCESS, meta={**result_to_return, 'current_step': 'HTML 분석 및 텍스트 추출이 성공적으로 완료되었습니다.', 'percentage': 100, 'pipeline_step': 'TEXT_EXTRACTION_SUCCESS'})
         return result_to_return
 
     except FileNotFoundError as e_fnf:
         logger.error(f"{log_prefix} FileNotFoundError during text extraction: {e_fnf}. HTML file path: {html_file_path}", exc_info=True)
         err_details_fnf = {'error': str(e_fnf), 'type': type(e_fnf).__name__, 'html_file': str(html_file_path)}
+        self.update_state(state=states.FAILURE, meta={'current_step': f'오류: 텍스트 추출 중 파일을 찾지 못했습니다. ({e_fnf})', **err_details_fnf, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_FAILED'})
         _update_root_task_state(
             root_task_id=chain_log_id, 
             state=states.FAILURE, 
@@ -198,6 +255,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
     except IOError as e_io:
         logger.error(f"{log_prefix} IOError during text extraction: {e_io}. HTML file path: {html_file_path}", exc_info=True)
         err_details_io = {'error': str(e_io), 'type': type(e_io).__name__, 'html_file': str(html_file_path), 'traceback': traceback.format_exc()}
+        self.update_state(state=states.FAILURE, meta={'current_step': f'오류: 텍스트 추출 중 파일 입출력 문제가 발생했습니다. ({e_io})', **err_details_io, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_FAILED'})
         _update_root_task_state(
             root_task_id=chain_log_id, 
             state=states.FAILURE, 
@@ -222,6 +280,7 @@ def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) ->
                 logger.warning(f"{log_prefix} Failed to remove partial text file {extracted_text_file_path}: {e_remove}", exc_info=True)
         
         err_details_general = {'error': str(e_general), 'type': type(e_general).__name__, 'html_file': str(html_file_path), 'traceback': traceback.format_exc()}
+        self.update_state(state=states.FAILURE, meta={'current_step': '오류: 텍스트 추출 중 예기치 않은 문제가 발생했습니다.', **err_details_general, 'current_task_id': task_id, 'pipeline_step': 'TEXT_EXTRACTION_FAILED'})
         _update_root_task_state(
             root_task_id=chain_log_id, 
             state=states.FAILURE, 

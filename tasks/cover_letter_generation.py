@@ -57,15 +57,32 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
 
     try:
         logger.info(f"{log_prefix} Starting cover letter generation. Filtered text length: {len(filtered_content)}, User prompt: {'Yes' if user_prompt_text else 'No'}. Associated filtered_text_file_path for logging: {filtered_text_file_path}")
+        # 작업 시작 시 상태 업데이트 (진행률 0%)
+        self.update_state(state='PROGRESS', meta={'current_step': '자기소개서 생성 준비 중입니다.', 'percentage': 0, 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_GENERATION_STARTED'})
         _update_root_task_state(
             root_task_id=root_task_id, 
-            state=states.STARTED,
+            state=states.STARTED, # STARTED 상태 유지 또는 PROGRESS로 변경 가능
             meta={
                 'current_step': '맞춤형 자기소개서 생성을 시작합니다...',
                 'status_message': "(4_generate_cover_letter) 자기소개서 생성 시작", 
                 'user_prompt': bool(user_prompt_text), 
                 'current_task_id': task_id,
-                'pipeline_step': 'COVER_LETTER_GENERATION_STARTED'
+                'pipeline_step': 'COVER_LETTER_GENERATION_STARTED',
+                'percentage': 5 # 예시 진행률
+            }
+        )
+
+        # LLM 호출 전 상태 업데이트 (진행률 30%)
+        self.update_state(state='PROGRESS', meta={'current_step': '핵심 내용 분석 및 자기소개서 초안 작성 중...', 'percentage': 30, 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_GENERATION_LLM_INPUT_PREP'})
+        _update_root_task_state(
+            root_task_id=root_task_id,
+            state=states.STARTED,
+            meta={
+                'current_step': '핵심 내용 분석 및 자기소개서 초안 작성 중입니다. 잠시만 기다려주세요.',
+                'status_message': "(4_generate_cover_letter) LLM 초안 작성 중",
+                'current_task_id': task_id,
+                'pipeline_step': 'COVER_LETTER_GENERATION_LLM_INPUT_PREP',
+                'percentage': 35 # 예시 진행률
             }
         )
 
@@ -81,6 +98,8 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         if not cover_letter_text or "생성 실패" in cover_letter_text or len(cover_letter_text) < 50: # 최소 길이 조건 추가
             error_message_llm = f"LLM cover letter generation failed or returned invalid content. Response: {try_format_log(cover_letter_text)}" # try_format_log 사용
             logger.error(f"{log_prefix} {error_message_llm}")
+            # 실패 상태 업데이트
+            self.update_state(state=states.FAILURE, meta={'current_step': '오류: 자기소개서 생성 중 LLM 응답에 문제가 발생했습니다.', 'percentage': 50, 'error': error_message_llm, 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_GENERATION_LLM_FAILED'})
             _update_root_task_state(
                 root_task_id=root_task_id, 
                 state=states.FAILURE, 
@@ -96,6 +115,8 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             raise ValueError(error_message_llm) # 구체적인 에러 메시지와 함께 ValueError 발생
 
         logger.info(f"{log_prefix} 자기소개서 생성 성공 (길이: {len(cover_letter_text)}) ")
+        # LLM 호출 성공 후 상태 업데이트 (진행률 70%)
+        self.update_state(state='PROGRESS', meta={'current_step': '자기소개서 초안이 완성되었습니다. 최종 검토 및 저장을 진행합니다.', 'percentage': 70, 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_LLM_COMPLETED'})
         _update_root_task_state(
             root_task_id=root_task_id,
             state=states.STARTED,
@@ -103,7 +124,8 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
                 'current_step': '자기소개서 초안이 완성되었습니다. 최종 검토 및 저장을 진행합니다...',
                 'status_message': "(4_generate_cover_letter) LLM 생성 완료, 저장 준비 중",
                 'current_task_id': task_id,
-                'pipeline_step': 'COVER_LETTER_LLM_COMPLETED'
+                'pipeline_step': 'COVER_LETTER_LLM_COMPLETED',
+                'percentage': 75 # 예시 진행률
             }
         )
 
@@ -121,6 +143,20 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         with open(cover_letter_file_path, "w", encoding="utf-8") as f:
             f.write(cover_letter_text)
         logger.info(f"{log_prefix} 생성된 자기소개서 파일 저장 완료: {cover_letter_file_path}")
+        # 파일 저장 후 상태 업데이트 (진행률 90%)
+        self.update_state(state='PROGRESS', meta={'current_step': '생성된 자기소개서를 안전하게 저장했습니다.', 'percentage': 90, 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_SAVED'})
+        _update_root_task_state(
+            root_task_id=root_task_id,
+            state=states.STARTED, # SUCCESS 전 마지막 PROGRESS
+            meta={
+                'current_step': '자기소개서가 저장되었습니다. 최종 결과를 정리합니다.',
+                'status_message': "(4_generate_cover_letter) 파일 저장 완료",
+                'cover_letter_file_path': cover_letter_file_path,
+                'current_task_id': task_id,
+                'pipeline_step': 'COVER_LETTER_SAVED',
+                'percentage': 95 # 예시 진행률
+            }
+        )
 
         # 최종 결과 업데이트
         final_result = {
@@ -133,10 +169,12 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             "current_step": "자기소개서 생성이 성공적으로 완료되었습니다!",
             "pipeline_step": "COVER_LETTER_GENERATION_COMPLETED" # 최종 단계 명시
         }
+        # 최종 성공 상태 업데이트 (진행률 100%)
+        self.update_state(state=states.SUCCESS, meta=final_result) # 여기서는 final_result에 percentage: 100 추가해도 좋음
         _update_root_task_state(
             root_task_id=root_task_id, 
             state=states.SUCCESS, # 최종 성공 상태
-            meta=final_result # 전체 결과 저장
+            meta={**final_result, 'percentage': 100} # 기존 final_result에 percentage 추가
         )
 
         logger.info(f"{log_prefix} ---------- Task finished successfully. Returning result. ----------")
@@ -144,6 +182,8 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
 
     except ValueError as e_val:
         logger.error(f"{log_prefix} ValueError in step 4: {e_val}", exc_info=True)
+        # 실패 상태 업데이트
+        self.update_state(state=states.FAILURE, meta={'current_step': f'오류: 자기소개서 생성 중 값 관련 문제가 발생했습니다. ({str(e_val)})', 'error': str(e_val), 'type': 'ValueError', 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'})
         _update_root_task_state(
             root_task_id=root_task_id, 
             state=states.FAILURE, 
@@ -163,6 +203,8 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
     except MaxRetriesExceededError as e_max_retries: # LLM 호출 관련 재시도 초과 (generate_cover_letter 내부에서 처리될 수도 있음)
         error_message = f"Max retries exceeded for LLM call: {e_max_retries}"
         logger.error(f"{log_prefix} {error_message}", exc_info=True)
+        # 실패 상태 업데이트
+        self.update_state(state=states.FAILURE, meta={'current_step': '오류: 자기소개서 생성 재시도 한도를 초과했습니다.', 'error': error_message, 'type': 'MaxRetriesExceededError', 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'})
         _update_root_task_state(
             root_task_id=root_task_id, 
             state=states.FAILURE, 
@@ -183,6 +225,8 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         error_message = f"Unexpected error in cover letter generation: {e_gen}"
         detailed_error_info = get_detailed_error_info(e_gen) # 상세 오류 정보 추출
         logger.error(f"{log_prefix} {error_message}", exc_info=True)
+        # 실패 상태 업데이트
+        self.update_state(state=states.FAILURE, meta={'current_step': '오류: 자기소개서 생성 중 예기치 않은 문제가 발생했습니다.', 'error': error_message, 'type': str(type(e_gen).__name__), 'details': detailed_error_info, 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'})
         _update_root_task_state(
             root_task_id=root_task_id, 
             state=states.FAILURE, 
