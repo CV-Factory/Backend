@@ -38,30 +38,22 @@ def handle_pipeline_completion(self, result_or_request_obj: Any, *, root_task_id
             logger.warning(f"{log_prefix} 성공 결과가 dict 타입이 아님: {type(result_or_request_obj)}. 자기소개서 텍스트를 저장할 수 없습니다.")
 
         # SUCCESS 상태의 meta에는 자기소개서 텍스트 또는 상태 메시지만 저장
-        # 다른 정보(예: final_status_meta의 다른 키들)는 여기서는 저장하지 않음.
-        # 필요하다면, result_data_for_state에 다른 주요 정보를 추가할 수 있음.
         result_data_for_state = cover_letter_text_to_store if cover_letter_text_to_store else status_message_to_store
 
-        # _update_root_task_state(
-        #     root_task_id=root_task_id, 
-        #     state=states.SUCCESS,
-        #     meta=result_data_for_state # 자기소개서 텍스트 또는 대체 메시지를 meta로 직접 저장
-        # )
+        # meta에 딕셔너리 형태로 저장하여 _update_root_task_state 호출
+        meta_to_store = {'cover_letter_output': result_data_for_state}
+        
+        _update_root_task_state(
+            root_task_id=root_task_id, 
+            state=states.SUCCESS,
+            meta=meta_to_store, # cover_letter_output 키를 가진 딕셔너리를 meta로 전달
+            logger_instance=logger, # 로거 인스턴스 전달
+            log_prefix=log_prefix # 로그 접두사 전달
+        )
+        logger.info(f"{log_prefix} Root task {root_task_id} 최종 상태 SUCCESS 및 meta 업데이트 요청됨. 전달된 meta: {try_format_log(meta_to_store)}")
 
-        # AsyncResult를 사용하여 직접 meta 업데이트
-        try:
-            root_task_async_result = AsyncResult(root_task_id, app=celery_app)
-            # meta에 딕셔너리 형태로 저장
-            meta_to_store = {'cover_letter_output': result_data_for_state}
-            root_task_async_result.update_state(
-                state=states.SUCCESS,
-                meta=meta_to_store
-            )
-            logger.info(f"{log_prefix} Root task {root_task_id} 최종 상태 SUCCESS 및 meta 직접 업데이트 성공. 저장된 meta: {try_format_log(meta_to_store)}")
-        except Exception as e_update:
-            logger.error(f"{log_prefix} Root task {root_task_id} 상태/meta 직접 업데이트 중 오류: {e_update}", exc_info=True)
-            # 실패 시 fallback으로 기존 _update_root_task_state 호출 (선택적)
-            # _update_root_task_state(root_task_id=root_task_id, state=states.SUCCESS, meta=result_data_for_state)
+        final_status_meta['callback_processed'] = True
+        final_status_meta['root_task_id'] = root_task_id
 
     else:
         logger.error(f"{log_prefix} 파이프라인 실패로 완료됨. Request object (or error info): {try_format_log(result_or_request_obj)}")
@@ -114,4 +106,4 @@ def handle_pipeline_completion(self, result_or_request_obj: Any, *, root_task_id
         logger.error(f"{log_prefix} Root task {root_task_id} 최종 상태 FAILURE로 업데이트됨 (콜백에 의해). Exception: {current_exc}")
 
     logger.info(f"{log_prefix} 파이프라인 완료 콜백 종료.")
-    return { "callback_processed": True, "root_task_id": root_task_id, "final_status_reported": final_status_meta.get('pipeline_overall_status') } 
+    return final_status_meta 

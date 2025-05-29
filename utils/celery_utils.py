@@ -19,36 +19,34 @@ def _update_root_task_state(root_task_id: str, state: str, meta: Optional[Dict[s
         # celery_app 대신 current_app 사용
         celery_app_instance = current_app._get_current_object() # 현재 Celery 앱 인스턴스 가져오기
 
-        if state != states.SUCCESS: # SUCCESS 상태가 아닐 때만 기존 meta와 병합
+        if state == states.SUCCESS:
+            # SUCCESS 상태일 경우, 전달된 meta로 덮어쓴다.
+            final_meta_for_update = current_meta_to_store
+            logger.info(f"{log_prefix} SUCCESS 상태. meta를 병합하지 않고 전달된 값으로 덮어씁니다: {try_format_log(final_meta_for_update)}")
+        else: # SUCCESS 상태가 아닐 때만 기존 meta와 병합
             try:
-                existing_task_result = AsyncResult(root_task_id, app=celery_app_instance) # app 인자 전달
+                existing_task_result = AsyncResult(root_task_id, app=celery_app_instance) 
                 existing_meta = existing_task_result.info if isinstance(existing_task_result.info, dict) else {}
                 if existing_meta:
-                    # current_meta_to_store가 딕셔너리일 때만 병합 시도
                     if isinstance(current_meta_to_store, dict):
                         merged_meta = {**existing_meta, **current_meta_to_store}
-                        current_meta_to_store = merged_meta
+                        final_meta_for_update = merged_meta
+                        logger.info(f"{log_prefix} 기존 meta와 전달된 meta를 병합했습니다: {try_format_log(final_meta_for_update)}")
                     else:
-                        # current_meta_to_store가 딕셔너리가 아니면 기존 메타를 유지하거나,
-                        # 혹은 current_meta_to_store로 덮어쓸지 결정해야 함.
-                        # 여기서는 SUCCESS가 아니므로, 기존 meta를 유지하는 방향으로 생각할 수 있으나,
-                        # pipeline_callbacks.py에서 FAILURE 시에는 이미 딕셔너리 형태의 full meta를 전달하므로
-                        # 이 경우는 잘 발생하지 않을 것으로 예상됨. 로깅 추가.
-                        logger.warning(f"{log_prefix} Non-SUCCESS state update, but current_meta_to_store is not a dict (type: {type(current_meta_to_store)}). Using current_meta_to_store as is, existing_meta will be overwritten if current_meta_to_store is not a dict by store_result's expectation for 'result'.")
-            except Exception as e_meta:
-                logger.warning(f"{log_prefix} 기존 메타 정보 로드/병합 중 오류: {e_meta}", exc_info=True)
-        # else: SUCCESS 상태일 때는 전달된 meta (current_meta_to_store)를 그대로 사용 (병합 X)
+                        final_meta_for_update = current_meta_to_store # current_meta가 dict가 아니면 병합 불가, 덮어쓰기
+                        logger.warning(f"{log_prefix} 기존 meta는 있으나, 전달된 meta가 딕셔너리가 아니므로 병합하지 않고 전달된 값으로 설정합니다: {try_format_log(final_meta_for_update)}")
+                else:
+                    final_meta_for_update = current_meta_to_store # 기존 meta가 없으면 전달된 값으로 설정
+                    logger.info(f"{log_prefix} 기존 meta가 없어 전달된 값으로 meta를 설정합니다: {try_format_log(final_meta_for_update)}")
+            except Exception as e_fetch_meta:
+                logger.error(f"{log_prefix} 기존 meta 조회 중 오류 발생. 전달된 meta로 덮어씁니다: {e_fetch_meta}", exc_info=True)
+                final_meta_for_update = current_meta_to_store
 
-        # Celery 백엔드를 통해 상태와 메타데이터 저장
-        celery_app_instance.backend.store_result(
-            task_id=root_task_id,
-            result=current_meta_to_store, # SUCCESS일 경우 문자열, 아닐 경우 병합된 딕셔너리
-            state=state,
-            traceback=traceback_str,
-            request=None
-        )
-        logger.info(f"{log_prefix} 상태 '{state}' 및 메타 정보 업데이트 성공.")
-        
+        # 실제 상태 업데이트
+        task_instance = celery_app_instance.AsyncResult(root_task_id) # AsyncResult로 태스크 인스턴스를 가져옴
+        task_instance.update_state(state=state, meta=final_meta_for_update)
+        logger.info(f"{log_prefix} 상태 '{state}' 및 메타 정보 업데이트 성공. 저장된 meta: {try_format_log(final_meta_for_update)}")
+
     except Exception as e:
         logger.critical(f"[StateUpdateFailureCritical] Critically failed to update root task {root_task_id} state: {e}", exc_info=True)
         if state == 'FAILURE': # 여기서는 mark_as_failure를 직접 호출하지 않고, store_result에 의존.
