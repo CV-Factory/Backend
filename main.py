@@ -279,15 +279,20 @@ async def get_task_status_internal(task_id: str, celery_app_instance_param): # c
 
         if response_status == states.SUCCESS:
             # meta에 자기소개서 텍스트 또는 대체 메시지가 직접 저장되므로, task_result.info 또는 task_result.result를 바로 사용
+            logger.info(f"{log_prefix} SUCCESS 상태 진입. task_result.state: {task_result.state}") # .state도 확인
+            logger.info(f"{log_prefix} task_result.info 타입: {type(task_result.info)}, 값: {try_format_log(task_result.info)}")
+            logger.info(f"{log_prefix} task_result.result 타입: {type(task_result.result)}, 값: {try_format_log(task_result.result)}")
+
+            # task_result.info를 우선 사용하고, None이면 task_result.result 사용
             raw_result = task_result.info if task_result.info is not None else task_result.result
+            logger.info(f"{log_prefix} raw_result 타입: {type(raw_result)}, 값: {try_format_log(raw_result)}")
             
             if isinstance(raw_result, str):
                 result_data = raw_result
-                logger.info(f"{log_prefix} SUCCESS 상태. 결과(자기소개서 또는 메시지)를 직접 사용: {try_format_log(result_data)}")
+                logger.info(f"{log_prefix} SUCCESS. 결과(자기소개서 또는 메시지)를 문자열로 직접 사용: {try_format_log(result_data)}")
             else:
-                # 예상치 못한 경우 (문자열이 아닌 경우), 기록을 남기고 전체 raw_result 반환
                 result_data = raw_result 
-                logger.warning(f"{log_prefix} SUCCESS 상태이지만 결과가 문자열이 아님. Type: {type(raw_result)}. 전체 결과 반환: {try_format_log(result_data)}")
+                logger.warning(f"{log_prefix} SUCCESS이지만 결과가 문자열이 아님! Type: {type(raw_result)}. 전체 결과 반환: {try_format_log(result_data)}")
 
         elif response_status == states.FAILURE:
             error_details = meta_info 
