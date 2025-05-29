@@ -1375,8 +1375,8 @@ def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str
     # 성공 시에는 step_4의 결과(final_result_from_chain)가 이 콜백의 인자로 전달됩니다.
     on_pipeline_success_signature = signature(
         'celery_tasks.handle_pipeline_completion',
-        kwargs={'root_task_id': root_task_id, 'is_success': True},
-        immutable=True
+        kwargs={'root_task_id': root_task_id, 'is_success': True}
+        # immutable=True <- 제거
     )
 
     # 실패 콜백 정의
@@ -1385,8 +1385,8 @@ def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str
     # 여기서는 간단히 실패했다는 사실만 전달하고, 상세 정보는 root_task_id를 통해 조회하도록 가정합니다.
     on_pipeline_failure_signature = signature(
         'celery_tasks.handle_pipeline_completion',
-        kwargs={'root_task_id': root_task_id, 'is_success': False}, # link_error 시 is_success=False 전달
-        immutable=True
+        kwargs={'root_task_id': root_task_id, 'is_success': False} # link_error 시 is_success=False 전달
+        # immutable=True <- 제거
     )
 
     try:
