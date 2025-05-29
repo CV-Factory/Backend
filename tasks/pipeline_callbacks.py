@@ -2,15 +2,13 @@ from celery_app import celery_app
 import logging
 import datetime
 import traceback
-from celery import states, current_task
+from celery import states, current_task, Celery, chord, group
 from celery.result import AsyncResult
 from typing import Any, Dict, List, Union
 from kombu.utils.uuid import uuid
 
-from celery import Celery, chord, group
-from utils.celery_utils import _update_root_task_state, get_celery_app_instance
+from utils.celery_utils import _update_root_task_state
 from utils.file_utils import try_format_log
-from utils.common_utils import try_format_log
 
 logger = logging.getLogger(__name__)
 
