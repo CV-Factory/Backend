@@ -7,7 +7,6 @@ from celery.result import AsyncResult
 from typing import Any, Dict, List, Union
 
 from celery import Celery, chord, group
-from shared_schemas.task import TaskResult, TaskStatus
 from utils.celery_utils import _update_root_task_state
 from utils.file_utils import try_format_log
 
