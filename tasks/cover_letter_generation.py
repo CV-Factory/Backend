@@ -9,8 +9,22 @@ from typing import Dict, Any, Optional
 from utils.file_utils import sanitize_filename, try_format_log # ../utils.file_utils -> utils.file_utils
 from utils.celery_utils import _update_root_task_state, get_detailed_error_info
 from generate_cover_letter_semantic import generate_cover_letter # ...generate_cover_letter_semantic -> generate_cover_letter_semantic
+from langchain_community.chat_models import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain.chains import LLMChain
+from utils.common_utils import get_datetime_prefix
+from utils.file_utils import save_content_to_file
+from core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# LLM 모델 초기화 (모듈 레벨에서 한 번만)
+try:
+    llm = ChatOpenAI(openai_api_key=settings.OPENAI_API_KEY, model_name=settings.OPENAI_MODEL_NAME)
+    logger.info("ChatOpenAI model loaded successfully during module initialization.")
+except Exception as e:
+    logger.error(f"Failed to load ChatOpenAI model during module initialization: {e}")
+    llm = None
 
 @celery_app.task(bind=True, name='celery_tasks.step_4_generate_cover_letter', max_retries=1, default_retry_delay=20)
 def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id: str, user_prompt_text: Optional[str]) -> Dict[str, Any]:
