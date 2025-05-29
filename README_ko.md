@@ -44,7 +44,7 @@
 | 언어 | Python 3.x |
 | 웹 프레임워크 | FastAPI |
 | 비동기 태스크 | Celery |
-| 태스크 브로커/백엔드 | Upstash Redis (Cloud Run 배포 및 로컬 개발 시 선택적 사용) / 로컬 Redis (Upstash를 사용하지 않는 로컬 개발 전용) |
+| 태스크 브로커/백엔드 | Upstash Redis (Cloud Run 배포 및 로컬 개발 시 권장) |
 | 웹 스크래핑/자동화 | Playwright |
 | HTML 파싱 | BeautifulSoup4 |
 | 데이터 처리 | Pydantic (요청/응답 모델용) |
@@ -73,19 +73,16 @@
     ```
 4.  Redis 환경 설정:
     *   Cloud Run (프로덕션/스테이징 환경): 애플리케이션은 Upstash Redis를 사용하도록 설정되어 있습니다. 연결 정보(`UPSTASH_REDIS_ENDPOINT`, `UPSTASH_REDIS_PORT`)는 `cloudbuild.yaml` 파일에 환경 변수로 설정되며, 비밀번호(`UPSTASH_REDIS_PASSWORD`)는 Google Secret Manager를 통해 주입됩니다.
-    *   로컬 개발 환경:
-        *   옵션 1 (일관성을 위해 권장): Upstash Redis 사용.
-            로컬 셸 또는 `.env` 파일( `CVFactory_Server` 루트에 없다면 생성)에 다음 환경 변수를 설정합니다:
-            ```env
-            UPSTASH_REDIS_ENDPOINT="your_upstash_endpoint.upstash.io"
-            UPSTASH_REDIS_PORT="your_upstash_port"
-            UPSTASH_REDIS_PASSWORD="your_upstash_password"
-            ```
-            이 변수들이 설정되면 `celery_app.py`가 자동으로 사용합니다.
-        *   옵션 2: 로컬 Redis 사용.
-            로컬 Redis 인스턴스(예: `docker run -d -p 6379:6379 redis`로 시작) 사용을 선호하는 경우, Upstash 관련 환경 변수를 설정하지 않거나 `REDIS_URL="redis://localhost:6379/0"`으로 설정합니다. `docker-compose.yml` 파일은 더 이상 로컬 Redis 서비스를 관리하지 않습니다.
+    *   로컬 개발 환경: Upstash Redis 사용.
+        로컬 셸 또는 `.env` 파일( `CVFactory_Server` 루트에 없다면 생성)에 다음 환경 변수를 설정합니다:
+        ```env
+        UPSTASH_REDIS_ENDPOINT="your_upstash_endpoint.upstash.io"
+        UPSTASH_REDIS_PORT="your_upstash_port"
+        UPSTASH_REDIS_PASSWORD="your_upstash_password"
+        ```
+        이 변수들이 설정되면 `celery_app.py`가 자동으로 사용합니다. `docker-compose.yml` 파일이 더 이상 로컬 Redis 서비스를 관리하지 않으므로, 이를 재정의하는 `REDIS_URL` 환경 변수가 설정되지 않았는지 확인하십시오.
 
-5.  Docker 컨테이너를 빌드하고 실행합니다 (위의 로컬 Redis 옵션 2를 선택한 경우 로컬 Redis 서비스 제외):
+5.  Docker 컨테이너를 빌드하고 실행합니다:
     ```bash
     docker-compose up --build
     ```

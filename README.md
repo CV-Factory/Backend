@@ -44,7 +44,7 @@ The server employs several key technologies and methodologies, which can be grou
 | Language | Python 3.x |
 | Web Framework | FastAPI |
 | Asynchronous Tasks | Celery |
-| Task Broker/Backend | Upstash Redis (for Cloud Run deployment and optionally for local development) / Local Redis (for local development only, if not using Upstash) |
+| Task Broker/Backend | Upstash Redis (for Cloud Run deployment and recommended for local development) |
 | Web Scraping/Automation | Playwright |
 | HTML Parsing | BeautifulSoup4 |
 | Data Handling | Pydantic (for request/response models) |
@@ -73,19 +73,16 @@ The server employs several key technologies and methodologies, which can be grou
     ```
 4. Environment Setup for Redis:
     *   For Cloud Run (Production/Staging): The application is configured to use Upstash Redis. Connection details (`UPSTASH_REDIS_ENDPOINT`, `UPSTASH_REDIS_PORT`) are set as environment variables in `cloudbuild.yaml`, and the password (`UPSTASH_REDIS_PASSWORD`) is injected via Google Secret Manager.
-    *   For Local Development:
-        *   Option 1 (Recommended for consistency): Use Upstash Redis.
-            Set the following environment variables in your local shell or a `.env` file (create one in the `CVFactory_Server` root if it doesn't exist):
-            ```env
-            UPSTASH_REDIS_ENDPOINT="your_upstash_endpoint.upstash.io"
-            UPSTASH_REDIS_PORT="your_upstash_port"
-            UPSTASH_REDIS_PASSWORD="your_upstash_password"
-            ```
-            The `celery_app.py` will automatically use these if set.
-        *   Option 2: Use Local Redis.
-            If you prefer to use a local Redis instance (e.g., started via `docker run -d -p 6379:6379 redis`), ensure no Upstash environment variables are set, or set `REDIS_URL="redis://localhost:6379/0"`. The `docker-compose.yml` no longer manages a local Redis service.
+    *   For Local Development: Use Upstash Redis.
+        Set the following environment variables in your local shell or a `.env` file (create one in the `CVFactory_Server` root if it doesn't exist):
+        ```env
+        UPSTASH_REDIS_ENDPOINT="your_upstash_endpoint.upstash.io"
+        UPSTASH_REDIS_PORT="your_upstash_port"
+        UPSTASH_REDIS_PASSWORD="your_upstash_password"
+        ```
+        The `celery_app.py` will automatically use these if set. Ensure no `REDIS_URL` environment variable is set to override this, as the `docker-compose.yml` no longer manages a local Redis service.
 
-5. Build and run the Docker containers (for services other than a local Redis if you choose Option 2 above):
+5. Build and run the Docker containers:
     ```bash
     docker-compose up --build
     ```
