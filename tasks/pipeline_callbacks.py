@@ -42,12 +42,24 @@ def handle_pipeline_completion(self, result_or_request_obj: Any, *, root_task_id
         # 필요하다면, result_data_for_state에 다른 주요 정보를 추가할 수 있음.
         result_data_for_state = cover_letter_text_to_store if cover_letter_text_to_store else status_message_to_store
 
-        _update_root_task_state(
-            root_task_id=root_task_id, 
-            state=states.SUCCESS,
-            meta=result_data_for_state # 자기소개서 텍스트 또는 대체 메시지를 meta로 직접 저장
-        )
-        logger.info(f"{log_prefix} Root task {root_task_id} 최종 상태 SUCCESS로 업데이트됨. 저장된 meta (자기소개서 또는 메시지): {try_format_log(result_data_for_state)}")
+        # _update_root_task_state(
+        #     root_task_id=root_task_id, 
+        #     state=states.SUCCESS,
+        #     meta=result_data_for_state # 자기소개서 텍스트 또는 대체 메시지를 meta로 직접 저장
+        # )
+
+        # AsyncResult를 사용하여 직접 meta 업데이트
+        try:
+            root_task_async_result = AsyncResult(root_task_id, app=celery_app)
+            root_task_async_result.update_state(
+                state=states.SUCCESS,
+                meta=result_data_for_state
+            )
+            logger.info(f"{log_prefix} Root task {root_task_id} 최종 상태 SUCCESS 및 meta 직접 업데이트 성공. 저장된 meta: {try_format_log(result_data_for_state)}")
+        except Exception as e_update:
+            logger.error(f"{log_prefix} Root task {root_task_id} 상태/meta 직접 업데이트 중 오류: {e_update}", exc_info=True)
+            # 실패 시 fallback으로 기존 _update_root_task_state 호출 (선택적)
+            # _update_root_task_state(root_task_id=root_task_id, state=states.SUCCESS, meta=result_data_for_state)
 
     else:
         logger.error(f"{log_prefix} 파이프라인 실패로 완료됨. Request object (or error info): {try_format_log(result_or_request_obj)}")
