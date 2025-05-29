@@ -6,7 +6,7 @@ import logging
 import importlib.util # importlib.util 추가
 import json # SSE를 위해 추가
 import asyncio # SSE를 위해 추가
-from fastapi import FastAPI, HTTPException, status, Query, Path, Request, Form # Request 추가
+from fastapi import FastAPI, HTTPException, status, Query, Path, Request, Form, BackgroundTasks # Request, BackgroundTasks 추가
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse # StreamingResponse 추가
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
