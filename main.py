@@ -59,6 +59,10 @@ class TaskStatusResponse(BaseModel):
     result: Any | None = None
     current_step: str | None = None
 
+class StartTaskRequest(BaseModel):
+    job_posting_url: str # HttpUrl 대신 str 사용 (클라이언트에서 일반 문자열로 보낼 것이므로)
+    user_prompt: Optional[str] = None
+
 class LogDisplayedCvRequest(BaseModel):
     displayed_text: str
 
@@ -187,8 +191,12 @@ async def log_displayed_cv_endpoint(
     return {"message": "Displayed CV text logged successfully.", "log_id": str(log_id)}
 
 @app.post("/", status_code=status.HTTP_202_ACCEPTED, response_model=TaskStatusResponse)
-async def start_task(job_posting_url: str = Form(...), user_prompt: Optional[str] = Form(None)):
+async def start_task(request_body: StartTaskRequest): # Form 대신 Pydantic 모델 사용
     request_id = str(uuid.uuid4())
+    # Pydantic 모델에서 직접 값 가져오기
+    job_posting_url = request_body.job_posting_url
+    user_prompt = request_body.user_prompt
+    
     logger.info(f"[ReqID: {request_id}] 요청 수신 (비동기 파이프라인 시작): URL='{job_posting_url}', Prompt='{user_prompt[:50] if user_prompt else None}...'")
     
     # 사용자 입력 로깅 (여기서는 URL과 프롬프트 유무만 로깅, 전체 프롬프트는 필요시)
