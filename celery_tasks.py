@@ -1424,10 +1424,16 @@ def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str
 
 
 @celery_app.task(bind=True, name="celery_tasks.handle_pipeline_completion")
-def handle_pipeline_completion(self, result_or_request_obj, root_task_id: str, is_success: bool):
+def handle_pipeline_completion(self, result_or_request_obj, root_task_id: str, is_success: bool = None):
     # `result_or_request_obj`는 성공 시 이전 태스크의 결과, 실패 시 Request 객체 (오류 정보를 포함)일 수 있습니다.
     # `is_success`와 `root_task_id`는 .s()를 통해 전달받은 추가 인자입니다.
-    
+    # link_error를 통해 호출될 경우 is_success가 누락될 수 있으므로 기본값을 설정합니다.
+
+    actual_is_success = isinstance(result_or_request_obj, dict) # 성공 시 결과는 dict, 실패 시 Request 객체
+    if is_success is None: # link_error로 호출된 경우
+        is_success = actual_is_success
+
+    chain_log_id = None
     task_id = self.request.id # 현재 콜백 태스크의 ID
     log_prefix = f"[PipelineCompletion / Root {root_task_id} / CallbackTask {task_id}]"
     logger.info(f"{log_prefix} 파이프라인 완료 콜백 시작. Success: {is_success}")
