@@ -1375,8 +1375,8 @@ def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str
     # 성공 시에는 step_4의 결과(final_result_from_chain)가 이 콜백의 인자로 전달됩니다.
     on_pipeline_success_signature = signature(
         'celery_tasks.handle_pipeline_completion',
-        args=(root_task_id, True), # is_success = True
-        immutable=True # 콜백의 결과는 중요하지 않으므로 immutable로 설정 가능
+        kwargs={'root_task_id': root_task_id, 'is_success': True},
+        immutable=True
     )
 
     # 실패 콜백 정의
@@ -1385,7 +1385,7 @@ def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str
     # 여기서는 간단히 실패했다는 사실만 전달하고, 상세 정보는 root_task_id를 통해 조회하도록 가정합니다.
     on_pipeline_failure_signature = signature(
         'celery_tasks.handle_pipeline_completion',
-        args=(root_task_id, False), # is_success = False
+        kwargs={'root_task_id': root_task_id, 'is_success': False}, # link_error 시 is_success=False 전달
         immutable=True
     )
 
@@ -1440,19 +1440,20 @@ def process_job_posting_pipeline(job_posting_url: str, user_prompt: Optional[str
 
 
 @celery_app.task(bind=True, name="celery_tasks.handle_pipeline_completion")
-def handle_pipeline_completion(self, result_or_request_obj, root_task_id: str, is_success: bool = None):
+def handle_pipeline_completion(self, result_or_request_obj, *, root_task_id: str, is_success: bool):
     # `result_or_request_obj`는 성공 시 이전 태스크의 결과, 실패 시 Request 객체 (오류 정보를 포함)일 수 있습니다.
-    # `is_success`와 `root_task_id`는 .s()를 통해 전달받은 추가 인자입니다.
-    # link_error를 통해 호출될 경우 is_success가 누락될 수 있으므로 기본값을 설정합니다.
+    # `root_task_id`와 `is_success`는 kwargs를 통해 전달받습니다.
 
-    actual_is_success = isinstance(result_or_request_obj, dict) # 성공 시 결과는 dict, 실패 시 Request 객체
-    if is_success is None: # link_error로 호출된 경우
-        is_success = actual_is_success
+    # actual_is_success = isinstance(result_or_request_obj, dict) # 성공 시 결과는 dict, 실패 시 Request 객체
+    # if is_success is None: # link_error로 호출된 경우 (이제 kwargs로 명시적으로 is_success가 전달되므로 이 로직 불필요)
+    #     is_success = actual_is_success
 
-    chain_log_id = None
+    # chain_log_id = None # 이 변수는 사용되지 않으므로 주석 처리 또는 삭제
     task_id = self.request.id # 현재 콜백 태스크의 ID
     log_prefix = f"[PipelineCompletion / Root {root_task_id} / CallbackTask {task_id}]"
-    logger.info(f"{log_prefix} 파이프라인 완료 콜백 시작. Success: {is_success}")
+    # 이제 is_success는 명확히 True 또는 False로 전달됨
+    logger.info(f"{log_prefix} 파이프라인 완료 콜백 시작. Success Flag: {is_success}")
+
 
     final_status_meta = {
         'root_task_id': root_task_id,
