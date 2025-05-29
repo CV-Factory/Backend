@@ -440,98 +440,94 @@ def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
 
     html_file_path = ""
     try:
-        logger.info(f"{log_prefix} Initializing Playwright...")
-        logger.debug(f"{log_prefix} Playwright sync_playwright context starting...")
+        logger.info(f"{log_prefix} Playwright operations starting for URL: {url}")
+        _update_root_task_state(
+            chain_log_id, 
+            state=states.STARTED, # 전체 파이프라인은 여전히 '시작됨' (진행중) 상태
+            meta={
+                'status_message': f'웹 페이지 내용을 가져오고 있습니다... (URL: {url})', 
+                'current_step_code': 'EXTRACT_HTML_STARTED',
+                'original_url': url,
+                'current_task_id': task_id,
+                'step1_extract_html_status': 'IN_PROGRESS' # step_1 자체의 진행 상태
+            }
+        )
+
         with sync_playwright() as p:
-            logger.debug(f"{log_prefix} Playwright sync_playwright context active.")
-            logger.info(f"{log_prefix} Playwright initialized. Launching browser...")
-            try:
-                # browser = p.chromium.launch(headless=True) # 로컬 테스트 시
-                browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']) # Docker 환경
-                logger.info(f"{log_prefix} Browser launched.")
-                logger.debug(f"{log_prefix} Browser object: {browser}")
-            except Exception as e_browser:
-                logger.error(f"{log_prefix} Error launching browser: {e_browser}", exc_info=True)
-                _update_root_task_state(chain_log_id, "(1_extract_html) 브라우저 실행 실패", state=states.FAILURE, exc=e_browser, traceback_str=traceback.format_exc(), meta={'error_message': str(e_browser), 'url': url})
-                self.update_state(state=states.FAILURE, meta={'error': str(e_browser)})
-                raise Reject(f"Browser launch failed: {e_browser}", requeue=False)
+            logger.debug(f"{log_prefix} Launching browser.")
+            # browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'])
+            # 컨테이너 환경에서 Chrome_with_proxy 사용 시 발생 가능한 권한 문제 해결을 위해 headless=False 시도 및 추가 args
+            # browser = p.chromium.launch(headless=False, args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--user-data-dir=/tmp/playwright_user_data'])
+            
+            # 안정성을 위해 headless=True로 되돌리고, 필요한 args 유지
+            browser_args = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--single-process']
+            logger.info(f"{log_prefix} Using browser launch args: {browser_args}")
+            browser = p.chromium.launch(headless=True, args=browser_args)
 
-            try:
-                page = browser.new_page()
-                logger.info(f"{log_prefix} New page created. Setting default timeout to {DEFAULT_PAGE_TIMEOUT}ms.")
-                logger.debug(f"{log_prefix} Page object: {page}")
-                page.set_default_timeout(DEFAULT_PAGE_TIMEOUT) # 모든 Playwright 작업에 대한 기본 타임아웃 설정
-                page.set_default_navigation_timeout(PAGE_NAVIGATION_TIMEOUT)
-                
-                logger.info(f"{log_prefix} Navigating to URL: {url}")
-                logger.debug(f"{log_prefix} Calling page.goto(\"{url}\", wait_until=\"domcontentloaded\")")
-                page.goto(url, wait_until="domcontentloaded") # 'load' 또는 'networkidle' 고려
-                logger.info(f"{log_prefix} Successfully navigated to URL. Current page URL: {page.url}")
-                logger.debug(f"{log_prefix} Navigation complete. Page URL after goto: {page.url}")
+            logger.info(f"{log_prefix} Browser launched. Creating new page.")
+            page = browser.new_page()
+            page.set_default_timeout(DEFAULT_PAGE_TIMEOUT) # 페이지 전체 기본 타임아웃 설정
+            page.set_default_navigation_timeout(PAGE_NAVIGATION_TIMEOUT) # 네비게이션 타임아웃
 
-                # 페이지 로드 후 추가적인 안정화 시간 (선택적)
-                # logger.info(f"{log_prefix} Waiting for 3 seconds for dynamic content to potentially load...")
-                # time.sleep(3)
+            logger.info(f"{log_prefix} Navigating to URL: {url}")
+            page.goto(url, wait_until="domcontentloaded", timeout=PAGE_NAVIGATION_TIMEOUT) # domcontentloaded 또는 networkidle
+            logger.info(f"{log_prefix} Successfully navigated to URL. Page title: \"{page.title()}\"")
 
-                logger.info(f"{log_prefix} Starting iframe processing and content extraction.")
-                logger.debug(f"{log_prefix} Calling _get_playwright_page_content_with_iframes_processed for URL: {url}")
-                page_content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, str(task_id))
-                logger.info(f"{log_prefix} Page content extracted. Length: {len(page_content)}")
-                logger.debug(f"{log_prefix} Extracted page_content successfully (length verified).")
+            logger.info(f"{log_prefix} Starting Playwright page content extraction including iframes.")
+            content = _get_playwright_page_content_with_iframes_processed(page, url, chain_log_id, str(task_id))
+            logger.info(f"{log_prefix} Page content extracted. Length: {len(content)}")
 
-                # 파일 저장 로직
-                # ... (이하 동일)
-            except PlaywrightError as e_playwright: # Playwright 관련 주요 예외
-                error_message = f"Playwright operation failed: {e_playwright}"
-                logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
-                _update_root_task_state(chain_log_id, "(1_extract_html) Playwright 작업 실패", state=states.FAILURE, exc=e_playwright, traceback_str=traceback.format_exc(), meta={'error_message': error_message, 'url': url})
-                # self.update_state(state=states.FAILURE, meta={'error': str(e_playwright), 'url': url}) # 개별 작업 상태도 업데이트
-                # 실패 시 재시도 로직은 Celery의 max_retries에 의해 이미 처리됨. 여기서는 Reject로 명시적 실패 처리.
-                raise Reject(error_message, requeue=False) # 재시도하지 않고 실패 처리
-            except Exception as e_general:
-                error_message = f"An unexpected error occurred during HTML extraction: {e_general}"
-                logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
-                _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 중 예기치 않은 오류", state=states.FAILURE, exc=e_general, traceback_str=traceback.format_exc(), meta={'error_message': error_message, 'url': url})
-                # self.update_state(state=states.FAILURE, meta={'error': str(e_general), 'url': url})
-                raise Reject(error_message, requeue=False)
-            finally:
-                logger.info(f"{log_prefix} Closing browser.")
-                if 'browser' in locals() and browser:
-                    try:
-                        browser.close()
-                        logger.info(f"{log_prefix} Browser closed successfully.")
-                    except Exception as e_close:
-                        logger.warning(f"{log_prefix} Error closing browser: {e_close}", exc_info=True)
-                logger.info(f"{log_prefix} Playwright context cleanup finished.")
+            logger.info(f"{log_prefix} Closing browser.")
+            browser.close()
+            logger.info(f"{log_prefix} Browser closed successfully.")
         
+        logger.info(f"{log_prefix} Playwright context cleanup finished.")
         logger.info(f"{log_prefix} Playwright operations complete.")
 
-        # 파일 이름 생성 및 저장
-        os.makedirs("logs", exist_ok=True)
-        filename_base = sanitize_filename(url, ensure_unique=False) # 고유 ID는 아래에서 추가
-        # 파일 이름에 chain_log_id의 일부와 고유 해시를 추가하여 추적 용이성 및 충돌 방지
-        unique_file_id = hashlib.md5((chain_log_id + str(uuid.uuid4())).encode('utf-8')).hexdigest()[:8]
-        html_file_name = f"{filename_base}_raw_html_{chain_log_id[:8]}_{unique_file_id}.html"
-        html_file_path = os.path.join("logs", html_file_name)
-            
-        logger.info(f"{log_prefix} Saving extracted HTML to: {html_file_path}")
-        logger.debug(f"{log_prefix} Opening file {html_file_path} for writing page_content (length: {len(page_content)}).")
-        with open(html_file_path, "w", encoding="utf-8") as f:
-            f.write(page_content)
-        logger.info(f"{log_prefix} HTML content successfully saved to {html_file_path}.")
-
-        result_data = {"html_file_path": html_file_path, "original_url": url, "page_content": page_content} # page_content 추가
+        logs_dir = "logs"
+        os.makedirs(logs_dir, exist_ok=True)
         
-        # 로깅을 위해 result_data의 page_content를 축약된 정보로 대체
-        result_data_for_log = result_data.copy()
-        if 'page_content' in result_data_for_log:
-            page_content_len = len(result_data_for_log['page_content']) if result_data_for_log['page_content'] is not None else 0
-            result_data_for_log['page_content'] = f"<page_content_omitted_from_log, length={page_content_len}>"
+        # 파일 이름 고유성 강화: chain_log_id (root_task_id) 추가
+        base_name_for_html = sanitize_filename(url, ensure_unique=False) + f"_raw_html_{chain_log_id[:8]}" # chain_log_id 앞 8자리 사용
+        unique_html_fn = sanitize_filename(base_name_for_html, "html", ensure_unique=True) # 파일명 중복 방지용 해시 추가
+        saved_html_path = os.path.join(logs_dir, unique_html_fn)
 
-        _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 및 저장 완료", meta={'html_file_path': html_file_path})
-        logger.info(f"{log_prefix} ---------- Task finished successfully. Result for log: {result_data_for_log} ----------") # 수정된 로깅
-        logger.debug(f"{log_prefix} Returning from step_1: keys={list(result_data.keys())}, page_content length: {len(result_data.get('page_content', '')) if result_data.get('page_content') else 0}")
-        return result_data
+        logger.info(f"{log_prefix} Saving extracted HTML to: {saved_html_path}")
+        with open(saved_html_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info(f"{log_prefix} HTML content successfully saved to {saved_html_path}.")
+
+        # 작업 완료 상태 업데이트 (성공적으로 HTML 추출 및 저장 후)
+        _update_root_task_state(
+            chain_log_id, # 루트 태스크 ID
+            state=states.STARTED, # 전체 파이프라인은 여전히 '시작됨' (진행중) 상태
+            meta={
+                'original_url': url,
+                'html_file_path': saved_html_path,
+                'page_content_length': len(content), # 실제 content는 다음 단계로 전달하므로 길이만 저장
+                'last_completed_step_task_id': task_id, # 방금 완료된 개별 태스크 ID
+                'status_message': 'HTML 추출 완료. 텍스트 추출 단계로 진행합니다.', # 사용자에게 보여줄 메시지
+                'current_pipeline_step': 'TEXT_EXTRACTION_PENDING', # 파이프라인의 현재 위치/다음 단계
+                'step1_extract_html_status': 'SUCCESS' # step_1 자체의 완료 상태
+            }
+        )
+        
+        logger.info(f"{log_prefix} ---------- Task finished successfully. Returning result. ----------")
+        return {"original_url": url, "html_file_path": saved_html_path, "page_content": content} # page_content 포함하여 반환
+
+    except PlaywrightError as e_playwright:
+        error_message = f"Playwright operation failed: {e_playwright}"
+        logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+        _update_root_task_state(chain_log_id, "(1_extract_html) Playwright 작업 실패", state=states.FAILURE, exc=e_playwright, traceback_str=traceback.format_exc(), meta={'error_message': error_message, 'url': url})
+        # self.update_state(state=states.FAILURE, meta={'error': str(e_playwright), 'url': url}) # 개별 작업 상태도 업데이트
+        # 실패 시 재시도 로직은 Celery의 max_retries에 의해 이미 처리됨. 여기서는 Reject로 명시적 실패 처리.
+        raise Reject(error_message, requeue=False) # 재시도하지 않고 실패 처리
+    except Exception as e_general:
+        error_message = f"An unexpected error occurred during HTML extraction: {e_general}"
+        logger.error(f"{log_prefix} {error_message} (URL: {url})", exc_info=True)
+        _update_root_task_state(chain_log_id, "(1_extract_html) HTML 추출 중 예기치 않은 오류", state=states.FAILURE, exc=e_general, traceback_str=traceback.format_exc(), meta={'error_message': error_message, 'url': url})
+        # self.update_state(state=states.FAILURE, meta={'error': str(e_general), 'url': url})
+        raise Reject(error_message, requeue=False)
 
     except Reject as e_reject: # 명시적으로 Reject된 경우, Celery가 재시도 또는 실패 처리
         logger.warning(f"{log_prefix} Task explicitly rejected: {e_reject.reason}. Celery will handle retry/failure.")
