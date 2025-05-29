@@ -56,10 +56,12 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         )
 
         # generate_cover_letter_semantic 모듈의 함수를 직접 호출
-        cover_letter_text = generate_cover_letter(
+        generated_text_tuple = generate_cover_letter(
             job_posting_content=filtered_content,
             prompt=user_prompt_text
         )
+        cover_letter_text = generated_text_tuple[0] # 첫 번째 요소를 사용
+        # formatted_cv = generated_text_tuple[1] # 포맷팅된 버전, 필요시 사용
         
         # cover_letter_text 결과 유효성 검사 강화
         if not cover_letter_text or "생성 실패" in cover_letter_text or len(cover_letter_text) < 50: # 최소 길이 조건 추가
