@@ -250,7 +250,7 @@ async def start_task(fastapi_request: Request, request_body: StartTaskRequest): 
             celery_app.backend.store_result(
                 task_id=response_task_id, 
                 result=None, 
-                status="STARTED", 
+                state="STARTED",  # 'status'를 'state'로 변경
                 meta={'current_step': '자기소개서 생성 파이프라인 시작 중...'}
             )
             logger.info(f"[ReqID: {request_id}] Manually set task {response_task_id} status to STARTED with initial step.")
