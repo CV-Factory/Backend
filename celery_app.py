@@ -16,24 +16,32 @@ LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0') # 기본 �
 # FINAL_REDIS_URL 결정 로직
 if UPSTASH_REDIS_PASSWORD and UPSTASH_REDIS_ENDPOINT and UPSTASH_REDIS_PORT:
     # Cloud Run 환경 또는 Upstash 정보가 모두 제공된 경우
-    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}?ssl_cert_reqs=CERT_NONE" # ssl_cert_reqs 추가
+    FINAL_REDIS_URL = f"rediss://default:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}" # ssl_cert_reqs 제거
     logger.info(f"Using Upstash Redis for Celery. Endpoint: {UPSTASH_REDIS_ENDPOINT}:{UPSTASH_REDIS_PORT}")
     
-    # transport_options 초기화
+    # transport_options 초기화 (Celery 5.x SSL 설정을 위해 broker_use_ssl/redis_backend_use_ssl 사용)
     CELERY_BROKER_TRANSPORT_OPTIONS = {}
     CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {}
     
 elif LOCAL_REDIS_URL.startswith("rediss://"):
     # REDIS_URL이 rediss:// 스킴을 사용하는 경우 (예: 다른 Upstash 인스턴스 또는 외부 SSL Redis)
-    if "?ssl_cert_reqs" not in LOCAL_REDIS_URL and "&ssl_cert_reqs" not in LOCAL_REDIS_URL:
-        separator = "?" if "?" not in LOCAL_REDIS_URL else "&"
-        FINAL_REDIS_URL = f"{LOCAL_REDIS_URL}{separator}ssl_cert_reqs=CERT_NONE"
-        logger.info(f"Using REDIS_URL (rediss://) and appending ssl_cert_reqs=CERT_NONE. URL: {FINAL_REDIS_URL.split('@')[0]}@...")
+    # ssl_cert_reqs는 broker_use_ssl/redis_backend_use_ssl을 통해 관리하므로 URL에서 제거하거나 기본값 유지
+    # 여기서는 URL에 명시적으로 포함된 ssl_cert_reqs를 제거하는 방향으로 수정
+    if "?ssl_cert_reqs" in LOCAL_REDIS_URL:
+        FINAL_REDIS_URL = LOCAL_REDIS_URL.split("?ssl_cert_reqs")[0]
+        logger.info(f"Using REDIS_URL (rediss://) and removing existing ssl_cert_reqs. Base URL: {FINAL_REDIS_URL.split('@')[0]}@...")
+    elif "&ssl_cert_reqs" in LOCAL_REDIS_URL: # 다른 파라미터 뒤에 오는 경우
+        base_url, params_part = LOCAL_REDIS_URL.split("?", 1)
+        params = params_part.split("&")
+        filtered_params = [p for p in params if not p.startswith("ssl_cert_reqs=")]
+        if filtered_params:
+            FINAL_REDIS_URL = f"{base_url}?{'&'.join(filtered_params)}"
+        else:
+            FINAL_REDIS_URL = base_url
+        logger.info(f"Using REDIS_URL (rediss://) and removing existing ssl_cert_reqs. Base URL: {FINAL_REDIS_URL.split('@')[0]}@...")
     else:
-        # 이미 ssl_cert_reqs가 있는 경우, CERT_NONE으로 설정되어 있는지 확인 또는 강제 (선택적)
-        # 여기서는 이미 존재하면 그대로 사용하도록 단순화합니다.
         FINAL_REDIS_URL = LOCAL_REDIS_URL
-        logger.info(f"Using REDIS_URL (rediss://) with existing ssl_cert_reqs parameter: {FINAL_REDIS_URL.split('@')[0]}@...")
+        logger.info(f"Using REDIS_URL (rediss://) as is (no ssl_cert_reqs found to remove): {FINAL_REDIS_URL.split('@')[0]}@...")
 
     CELERY_BROKER_TRANSPORT_OPTIONS = {}
     CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {}
@@ -80,10 +88,10 @@ except Exception as e:
 
 # 선택적 Celery 설정 (필요에 따라 추가)
 # Redis SSL 설정은 URL에서 처리하므로 주석 유지
-# if FINAL_REDIS_URL.startswith("rediss://"):
-#    celery_app.conf.broker_use_ssl = {'ssl_cert_reqs': ssl.CERT_REQUIRED} # ssl.CERT_REQUIRED 사용
-#    celery_app.conf.redis_backend_use_ssl = {'ssl_cert_reqs': ssl.CERT_REQUIRED} # ssl.CERT_REQUIRED 사용
-#    logger.info("Celery SSL/TLS enabled for Upstash Redis with ssl.CERT_REQUIRED.")
+if FINAL_REDIS_URL.startswith("rediss://"):
+   celery_app.conf.broker_use_ssl = {'ssl_cert_reqs': ssl.CERT_REQUIRED} # ssl.CERT_REQUIRED 사용
+   celery_app.conf.redis_backend_use_ssl = {'ssl_cert_reqs': ssl.CERT_REQUIRED} # ssl.CERT_REQUIRED 사용
+   logger.info("Celery SSL/TLS enabled for Upstash Redis with ssl.CERT_REQUIRED.")
 
 celery_app.conf.update(
     task_serializer='json',
