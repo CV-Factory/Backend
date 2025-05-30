@@ -15,6 +15,7 @@ steps:
         --image asia-northeast3-docker.pkg.dev/$PROJECT_ID/cvfactory/cvfactory-server:latest \
         --region asia-northeast3 \
         --platform managed \
+        --service-account=CVFactory-server-sa@cvfactory-456014.iam.gserviceaccount.com \
         --allow-unauthenticated \
         --port 8000 \
         --cpu 1 \
