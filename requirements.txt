@@ -12,7 +12,7 @@ langchain-cohere
 langchain-experimental
 langchain-groq  # Groq API 사용을 위해 추가
 celery
-redis
+redis==5.0.4
 beautifulsoup4
 python-multipart
 python-dotenv # 환경 변수 관리를 위해 추가 
