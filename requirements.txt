@@ -12,7 +12,7 @@ langchain-cohere
 langchain-experimental
 langchain-groq  # Groq API 사용을 위해 추가
 celery==5.3.6
-kombu>=5.3.0,<5.4.0
+kombu>=5.4.0,<5.5.0
 redis==4.6.0
 beautifulsoup4
 python-multipart
