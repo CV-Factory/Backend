@@ -119,27 +119,30 @@ Logs and extracted files will be saved to the `logs/` directory, which is mapped
 
 ## ⚙️ CI/CD Pipeline
 
-This project uses Google Cloud Build for its CI/CD pipeline.
+This project uses GitHub Actions for its CI/CD pipeline. Previously, Google Cloud Build was used, but it has been migrated to GitHub Actions for cost-effectiveness and a more GitHub-centric workflow management.
 
--   Trigger: Automatically starts when new commits are pushed to the `develop` branch of the GitHub repository.
--   Platform: Google Cloud Build.
--   Configuration: Build and deployment steps are defined in the `cloudbuild.yaml` file.
--   Key Steps:
-    1.  Build Docker Image: Builds the application's Docker image.
-    2.  Push to Artifact Registry: Pushes the built image to Google Artifact Registry.
-    3.  Deploy to Cloud Run: Deploys the new image to the `cvfactory-server` service on Google Cloud Run.
-    4.  Resource Configuration: Applies specific CPU (1), memory (2Gi), and instance count (min 0, max 1) settings. The service is configured to listen on port 8000 internally.
-    5.  Environment Variables (Cloud Run):
-        *   `PYTHONUNBUFFERED=1`
-        *   `UPSTASH_REDIS_ENDPOINT`: Your Upstash Redis endpoint (e.g., `gusc1-inviting-kit-31726.upstash.io`)
-        *   `UPSTASH_REDIS_PORT`: Your Upstash Redis port (e.g., `31726`)
-    6.  Secrets Management (Cloud Run): Securely injects sensitive data as environment variables using Google Secret Manager:
-        *   `GROQ_API_KEY` (latest version)
-        *   `COHERE_API_KEY` (latest version)
-        *   `UPSTASH_REDIS_PASSWORD` (The password for your Upstash Redis instance, latest version)
-    7.  Service Account: Utilizes a dedicated service account with least-privilege permissions. Ensure this service account (or the default Compute Engine service account if no specific service account is set for the Cloud Run service) has the "Secret Manager Secret Accessor" (roles/secretmanager.secretAccessor) role to access the secrets specified.
+-   **Trigger**: Automatically starts when new commits are pushed to the `develop` branch of the GitHub repository.
+-   **Platform**: GitHub Actions.
+-   **Workflow File**: Defined in `.github/workflows/deploy.yml`.
+-   **Key Steps**:
+    1.  **Checkout Code**: Uses `actions/checkout@v4` to fetch the latest code.
+    2.  **Authenticate to GCP**: Uses `google-github-actions/auth@v2` to authenticate to GCP using Workload Identity Federation. This allows secure access to GCP resources without needing service account keys.
+        *   **Workload Identity Federation (WIF)**: Establishes a trust relationship between GitHub Actions and GCP, allowing GitHub Actions workflows to securely impersonate a GCP service account. This involves creating a Workload Identity Pool and Provider in GCP, and linking it to the GitHub repository and a service account.
+    3.  **Login to GitHub Container Registry (GHCR)**: Uses `docker/login-action@v3` to log in to GHCR.
+    4.  **Build and Push Docker Image**: Uses `docker/build-push-action@v5` to build the application's Docker image and push the generated image to GHCR. The commit SHA is used for image tagging.
+    5.  **Deploy to Cloud Run**: Uses `google-github-actions/deploy-cloudrun@v2` to deploy the new image to the `cvfactory-server` service on Google Cloud Run.
+-   **Resource Configuration (Cloud Run)**: Applies specific CPU (1), memory (2Gi), and instance count (min 0, max 1) settings. The service is configured to listen on port 8000 internally.
+-   **Environment Variables (Cloud Run)**:
+    *   `PYTHONUNBUFFERED=1`
+    *   `UPSTASH_REDIS_ENDPOINT`: Your Upstash Redis endpoint.
+    *   `UPSTASH_REDIS_PORT`: Your Upstash Redis port.
+-   **Secrets Management (Cloud Run)**: Securely injects sensitive data as environment variables using Google Secret Manager. The GitHub Actions workflow accesses these secrets using the permissions of the authenticated service account (`github-actions-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com`):
+    *   `GROQ_API_KEY` (latest version)
+    *   `COHERE_API_KEY` (latest version)
+    *   `UPSTASH_REDIS_PASSWORD` (The password for your Upstash Redis instance, latest version)
+-   **Service Account (GCP)**: The GitHub Actions workflow uses a dedicated service account named `github-actions-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com`. This service account is granted permissions for Cloud Run deployment (`roles/run.admin`), Secret Manager access (`roles/secretmanager.secretAccessor`), and Workload Identity User (`roles/iam.workloadIdentityUser`).
 
-## 📄 Project Structure
+## �� Project Structure
 
 ```
 .

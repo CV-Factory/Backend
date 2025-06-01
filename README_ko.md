@@ -111,25 +111,28 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
 
 ## ⚙️ CI/CD 파이프라인
 
-이 프로젝트는 CI/CD 파이프라인을 위해 Google Cloud Build를 사용합니다.
+이 프로젝트는 CI/CD 파이프라인을 위해 GitHub Actions를 사용합니다. 이전에는 Google Cloud Build를 사용했으나, 비용 효율성 및 GitHub 중심의 워크플로우 관리를 위해 GitHub Actions로 이전했습니다.
 
--   트리거: GitHub 저장소의 `develop` 브랜치에 새로운 커밋이 푸시될 때 자동으로 시작됩니다.
--   플랫폼: Google Cloud Build.
--   설정: 빌드 및 배포 단계는 `cloudbuild.yaml` 파일에 정의되어 있습니다.
--   주요 단계:
-    1.  Docker 이미지 빌드: 애플리케이션의 Docker 이미지를 빌드합니다.
-    2.  Artifact Registry에 푸시: 빌드된 이미지를 Google Artifact Registry에 푸시합니다.
-    3.  Cloud Run에 배포: 새 이미지를 Google Cloud Run의 `cvfactory-server` 서비스에 배포합니다.
-    4.  리소스 설정: 특정 CPU (1), 메모리 (2Gi) 및 인스턴스 수 (최소 0, 최대 1) 설정을 적용합니다. 서비스는 내부적으로 8000번 포트에서 수신 대기하도록 설정됩니다.
-    5.  환경 변수 (Cloud Run):
-        *   `PYTHONUNBUFFERED=1`
-        *   `UPSTASH_REDIS_ENDPOINT`: 사용자의 Upstash Redis 엔드포인트 (예: `gusc1-inviting-kit-31726.upstash.io`)
-        *   `UPSTASH_REDIS_PORT`: 사용자의 Upstash Redis 포트 (예: `31726`)
-    6.  보안 비밀 관리 (Cloud Run): 다음과 같은 민감한 데이터를 Google Secret Manager를 사용하여 환경 변수로 안전하게 주입합니다:
-        *   `GROQ_API_KEY` (최신 버전)
-        *   `COHERE_API_KEY` (최신 버전)
-        *   `UPSTASH_REDIS_PASSWORD` (Upstash Redis 인스턴스의 비밀번호, 최신 버전)
-    7.  서비스 계정: 최소 권한 원칙에 따른 전용 서비스 계정을 활용합니다. 이 서비스 계정(또는 Cloud Run 서비스에 특정 서비스 계정이 설정되지 않은 경우 기본 Compute Engine 서비스 계정)에 지정된 보안 비밀에 접근하기 위한 "Secret Manager 비밀 접근자"(roles/secretmanager.secretAccessor) 역할이 부여되었는지 확인하십시오.
+-   **트리거**: GitHub 저장소의 `develop` 브랜치에 새로운 커밋이 푸시될 때 자동으로 시작됩니다.
+-   **플랫폼**: GitHub Actions.
+-   **워크플로우 파일**: `.github/workflows/deploy.yml`에 정의되어 있습니다.
+-   **주요 단계**:
+    1.  **코드 체크아웃**: `actions/checkout@v4`를 사용하여 최신 코드를 가져옵니다.
+    2.  **GCP 인증**: `google-github-actions/auth@v2`를 사용하여 Workload Identity Federation 방식으로 GCP에 인증합니다. 이를 통해 서비스 계정 키 없이 안전하게 GCP 리소스에 접근할 수 있습니다.
+        *   **Workload Identity Federation (WIF)**: GitHub Actions와 GCP 간의 신뢰 관계를 설정하여, GitHub Actions 워크플로우가 GCP 서비스 계정을 안전하게 가장(impersonate)할 수 있도록 합니다. GCP에서 Workload Identity Pool 및 Provider를 생성하고, GitHub 리포지토리 및 서비스 계정을 연결합니다.
+    3.  **GitHub Container Registry (GHCR) 로그인**: `docker/login-action@v3`를 사용하여 GHCR에 로그인합니다.
+    4.  **Docker 이미지 빌드 및 푸시**: `docker/build-push-action@v5`를 사용하여 애플리케이션의 Docker 이미지를 빌드하고, 생성된 이미지를 GHCR에 푸시합니다. 이미지 태그에는 커밋 SHA가 사용됩니다.
+    5.  **Cloud Run에 배포**: `google-github-actions/deploy-cloudrun@v2`를 사용하여 새 이미지를 Google Cloud Run의 `cvfactory-server` 서비스에 배포합니다.
+-   **리소스 설정 (Cloud Run)**: 특정 CPU (1), 메모리 (2Gi) 및 인스턴스 수 (최소 0, 최대 1) 설정을 적용합니다. 서비스는 내부적으로 8000번 포트에서 수신 대기하도록 설정됩니다.
+-   **환경 변수 (Cloud Run)**:
+    *   `PYTHONUNBUFFERED=1`
+    *   `UPSTASH_REDIS_ENDPOINT`: 사용자의 Upstash Redis 엔드포인트.
+    *   `UPSTASH_REDIS_PORT`: 사용자의 Upstash Redis 포트.
+-   **보안 비밀 관리 (Cloud Run)**: 다음과 같은 민감한 데이터를 Google Secret Manager를 사용하여 환경 변수로 안전하게 주입합니다. GitHub Actions 워크플로우는 인증된 서비스 계정(`github-actions-sa@프로젝트ID.iam.gserviceaccount.com`)의 권한으로 이 비밀들에 접근합니다.
+    *   `GROQ_API_KEY` (최신 버전)
+    *   `COHERE_API_KEY` (최신 버전)
+    *   `UPSTASH_REDIS_PASSWORD` (Upstash Redis 인스턴스의 비밀번호, 최신 버전)
+-   **서비스 계정 (GCP)**: GitHub Actions 워크플로우는 `github-actions-sa@프로젝트ID.iam.gserviceaccount.com` 라는 전용 서비스 계정을 사용합니다. 이 서비스 계정에는 Cloud Run 배포 (`roles/run.admin`), Secret Manager 접근 (`roles/secretmanager.secretAccessor`), 그리고 Workload Identity 사용자 (`roles/iam.workloadIdentityUser`) 권한이 부여되어 있습니다.
 
 ## 📄 프로젝트 구조
 
