@@ -3,6 +3,7 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ "develop" ]
+  workflow_dispatch:
 
 env:
   GCP_PROJECT_ID: cvfactory-456014 # GCP 프로젝트 ID를 여기에 입력하거나 Secrets 사용
