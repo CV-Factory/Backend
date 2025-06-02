@@ -54,18 +54,25 @@ jobs:
       uses: google-github-actions/setup-gcloud@v2
 
     - name: Deploy to Google Cloud Run
-      run: |
-        gcloud run deploy ${{ env.CLOUD_RUN_SERVICE_NAME }} \
-          --image ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REMOTE_REPO }}/${{ steps.string.outputs.lowercase }}:${{ github.sha }} \
-          --region ${{ env.GCP_REGION }} \
-          --platform managed \
-          --service-account ${{ env.GCP_SERVICE_ACCOUNT }} \
-          --allow-unauthenticated \
-          --port 8000 \
-          --cpu 1 \
-          --memory 2Gi \
-          --min-instances 0 \
-          --max-instances 1 \
-          --set-env-vars="PYTHONUNBUFFERED=1,UPSTASH_REDIS_ENDPOINT=gusc1-inviting-kit-31726.upstash.io,UPSTASH_REDIS_PORT=31726" \
-          --update-secrets="GROQ_API_KEY=GROQ_API_KEY:latest,COHERE_API_KEY=COHERE_API_KEY:latest,UPSTASH_REDIS_PASSWORD=UPSTASH_REDIS_PASSWORD:latest" \
-          --project ${{ env.GCP_PROJECT_ID }} 
+      id: deploy
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        service: ${{ env.CLOUD_RUN_SERVICE_NAME }}
+        region: ${{ env.GCP_REGION }}
+        # project_id: ${{ env.GCP_PROJECT_ID }} # Authenticate to Google Cloud 단계에서 이미 프로젝트 ID가 설정됨
+        image: asia-northeast3-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REMOTE_REPO }}/${{ steps.string.outputs.lowercase }}:${{ github.sha }}
+        # service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
+        env_vars: |
+          PYTHONUNBUFFERED=1
+          UPSTASH_REDIS_ENDPOINT=${{ secrets.UPSTASH_REDIS_ENDPOINT }}
+          UPSTASH_REDIS_PORT=${{ secrets.UPSTASH_REDIS_PORT }}
+        secrets: |
+          GROQ_API_KEY=GROQ_API_KEY:latest
+          COHERE_API_KEY=COHERE_API_KEY:latest
+          UPSTASH_REDIS_PASSWORD=UPSTASH_REDIS_PASSWORD:latest
+        flags: --allow-unauthenticated --port 8000 --cpu 1 --memory 2Gi --min-instances 0 --max-instances 1 --platform managed
+
+    # If the deploy step failed, exit with an error
+    - name: Check deploy status
+      if: ${{ steps.deploy.outcome == 'failure' }}
+      run: exit 1 
