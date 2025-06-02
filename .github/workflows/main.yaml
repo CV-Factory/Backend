@@ -50,9 +50,8 @@ jobs:
         # gcloud_service_account: ${{ env.GCP_SERVICE_ACCOUNT }} # Authenticate to Google Cloud 단계의 주체는 빌더 SA
         # token_format: 'access_token'
 
-    # 명시적으로 Docker가 asia.gcr.io에 인증하도록 gcloud 명령어 실행 (선택 사항, auth 액션이 처리하지 못할 경우)
-    # - name: Configure Docker for GAR (asia.gcr.io)
-    #   run: gcloud auth configure-docker asia.gcr.io --quiet
+    - name: Configure Docker for GAR (asia.gcr.io)
+      run: gcloud auth configure-docker asia.gcr.io --quiet
 
     - name: Build and push Docker image to GAR (asia.gcr.io)
       uses: docker/build-push-action@v5
