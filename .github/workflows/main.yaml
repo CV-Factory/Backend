@@ -9,6 +9,7 @@ env:
   GCP_REGION: asia-northeast3
   CLOUD_RUN_SERVICE_NAME: cvfactory-server
   GCP_SERVICE_ACCOUNT: CVFactory-server-sa@cvfactory-456014.iam.gserviceaccount.com
+  ARTIFACT_REGISTRY_REMOTE_REPO: ghcr-remote # 새로 추가된 환경 변수
 
 jobs:
   build-and-deploy:
@@ -16,6 +17,7 @@ jobs:
     permissions:
       contents: read
       packages: write # GitHub Packages에 쓰기 권한 필요
+      id-token: write # Google Cloud 인증에 필요
 
     steps:
     - name: Checkout code
@@ -52,7 +54,7 @@ jobs:
     - name: Deploy to Google Cloud Run
       run: |
         gcloud run deploy ${{ env.CLOUD_RUN_SERVICE_NAME }} \
-          --image ghcr.io/${{ steps.string.outputs.lowercase }}:${{ github.sha }} \
+          --image ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REMOTE_REPO }}/${{ steps.string.outputs.lowercase }}:${{ github.sha }} \
           --region ${{ env.GCP_REGION }} \
           --platform managed \
           --service-account ${{ env.GCP_SERVICE_ACCOUNT }} \
