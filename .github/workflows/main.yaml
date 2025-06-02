@@ -36,12 +36,14 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Build and push Docker image to GitHub Packages
+    - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
         push: true
         tags: ghcr.io/${{ steps.string.outputs.lowercase }}:${{ github.sha }}
+        labels: ${{ steps.meta.outputs.labels }}
+        platforms: linux/amd64
 
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
