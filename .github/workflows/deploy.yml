@@ -1,4 +1,4 @@
-name: Deploy to Google Cloud Run
+name: Build and Deploy to Cloud Run
 
 on:
   push:
@@ -6,71 +6,44 @@ on:
       - develop
 
 env:
-  GCP_PROJECT_ID: cvfactory-456014
-  GCP_REGION: asia-northeast3
-  GCP_SERVICE_NAME: cvfactory-server
-  GHCR_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+  PROJECT_ID: cvfactory-456014
+  SERVICE_NAME: cvfactory-server
+  REGION: asia-northeast3
 
 jobs:
   build-and-deploy:
+    name: Build and Deploy
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write # GitHub Packages에 쓰기 권한
-      id-token: write # Google Cloud 인증을 위한 OIDC 토큰 권한
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Authenticate to Google Cloud
-      uses: 'google-github-actions/auth@v2'
-      with:
-        workload_identity_provider: 'projects/627721457878/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider-v2'
-        service_account: 'github-actions-sa@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com'
+      - name: Google Auth
+        id: auth
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
 
-    - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.repository_owner }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Cloud SDK
+        uses: 'google-github-actions/setup-gcloud@v2'
 
-    - name: Build and push Docker image
-      id: build_image # 다음 단계에서 이미지 ID를 참조하기 위해 id 부여
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: ${{ env.GHCR_IMAGE_NAME }}:${{ github.sha }}
-        labels: |
-          org.opencontainers.image.source=${{ github.repositoryUrl }}
-          org.opencontainers.image.revision=${{ github.sha }}
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
 
-    - name: Deploy to Cloud Run
-      uses: 'google-github-actions/deploy-cloudrun@v2'
-      with:
-        service: ${{ env.GCP_SERVICE_NAME }}
-        region: ${{ env.GCP_REGION }}
-        image: ${{ env.GHCR_IMAGE_NAME }}:${{ github.sha }}
-        project_id: ${{ env.GCP_PROJECT_ID }}
-        env_vars: |
-          PYTHONUNBUFFERED=1
-          UPSTASH_REDIS_ENDPOINT=gusc1-inviting-kit-31726.upstash.io
-          UPSTASH_REDIS_PORT=31726
-        secrets: |
-          GROQ_API_KEY=GROQ_API_KEY:latest
-          COHERE_API_KEY=COHERE_API_KEY:latest
-          UPSTASH_REDIS_PASSWORD=UPSTASH_REDIS_PASSWORD:latest
-        flags: >-
-          --platform=managed
-          --service-account=github-actions-sa@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com
-          --allow-unauthenticated
-          --port=8000
-          --cpu=1
-          --memory=2Gi
-          --min-instances=0
-          --max-instances=1
+      - name: Build Docker image
+        run: |-
+          docker build \
+            --tag "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:latest" \
+            .
 
-    - name: 'Echo deployment status'
-      run: echo 'Deployment to Cloud Run finished.' 
+      - name: Push Docker image
+        run: |-
+          docker push "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:latest"
+
+      - name: Deploy to Cloud Run
+        run: |-
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:latest" \
+            --region "${{ env.REGION }}" \
+            --platform "managed" \
+            --quiet 
