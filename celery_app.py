@@ -11,7 +11,7 @@ UPSTASH_REDIS_PORT = os.environ.get('UPSTASH_REDIS_PORT')
 UPSTASH_REDIS_PASSWORD = os.environ.get('UPSTASH_REDIS_PASSWORD')
 
 # 로컬 테스트 시 REDIS_URL 환경 변수 또는 직접 Upstash 정보 사용 가능
-LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0') # 기본 로컬 Redis
+LOCAL_REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0').strip() # 기본 로컬 Redis, URL 앞뒤 공백 제거
 
 # FINAL_REDIS_URL 결정 로직
 if UPSTASH_REDIS_PASSWORD and UPSTASH_REDIS_ENDPOINT and UPSTASH_REDIS_PORT:
