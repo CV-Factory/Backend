@@ -27,14 +27,23 @@ jobs:
       - name: Set up Cloud SDK
         uses: 'google-github-actions/setup-gcloud@v2'
 
+      - name: 'Debug: Check gcloud auth'
+        run: gcloud auth list
+
       - name: Configure Docker
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: 'Debug: Check Docker config'
+        run: cat ~/.docker/config.json
 
       - name: Build Docker image
         run: |-
           docker build \
             --tag "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:latest" \
             .
+
+      - name: 'Debug: Check local images'
+        run: docker images
 
       - name: Push Docker image
         run: |-
