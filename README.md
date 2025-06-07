@@ -174,10 +174,3 @@ CC BY NC 4.0
 ## 📬 Contact
 
 wintrover@gmail.com
-
-This is a backend server for CV-Factory.
-
-# README
-
-This is the backend for CV-Factory.
-Final test push. Again. 

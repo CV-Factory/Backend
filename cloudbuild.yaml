@@ -25,6 +25,7 @@ steps:
     - '--platform'
     - 'managed'
     - '--allow-unauthenticated'
+    - '--remove-env-vars=REDIS_URL'
     - '--update-secrets=REDIS_URL=REDIS_URL_FOR_RUN:latest'
 images:
 - 'asia-northeast3-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cvfactory-server:$COMMIT_SHA'
