@@ -142,7 +142,7 @@ This project uses GitHub Actions for its CI/CD pipeline. Previously, Google Clou
     *   `UPSTASH_REDIS_PASSWORD` (The password for your Upstash Redis instance, latest version)
 -   **Service Account (GCP)**: The GitHub Actions workflow uses a dedicated service account named `github-actions-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com`. This service account is granted permissions for Cloud Run deployment (`roles/run.admin`), Secret Manager access (`roles/secretmanager.secretAccessor`), and Workload Identity User (`roles/iam.workloadIdentityUser`).
 
-## �� Project Structure
+## 📄 Project Structure
 
 ```
 .
@@ -174,3 +174,5 @@ CC BY NC 4.0
 ## 📬 Contact
 
 wintrover@gmail.com
+
+This is a backend server for CV-Factory.
