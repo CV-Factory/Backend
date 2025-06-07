@@ -1,23 +1,31 @@
 steps:
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', 'asia-northeast3-docker.pkg.dev/$PROJECT_ID/cv-factory/cv-factory-backend:$COMMIT_SHA', '.']
+  args:
+    - 'build'
+    - '-t'
+    - 'asia-northeast3-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cvfactory-server:$COMMIT_SHA'
+    - '.'
+  id: 'Build Docker image'
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['push', 'asia-northeast3-docker.pkg.dev/$PROJECT_ID/cv-factory/cv-factory-backend:$COMMIT_SHA']
+  args:
+    - 'push'
+    - 'asia-northeast3-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cvfactory-server:$COMMIT_SHA'
+  id: 'Push to Artifact Registry'
 - name: 'gcr.io/cloud-builders/gcloud'
   id: 'Deploy to Cloud Run'
   entrypoint: 'gcloud'
   args:
-  - 'run'
-  - 'deploy'
-  - 'cv-factory-backend'
-  - '--image'
-  - 'asia-northeast3-docker.pkg.dev/$PROJECT_ID/cv-factory/cv-factory-backend:$COMMIT_SHA'
-  - '--region'
-  - 'asia-northeast3'
-  - '--platform'
-  - 'managed'
-  - '--allow-unauthenticated'
+    - 'run'
+    - 'deploy'
+    - 'cvfactory-server'
+    - '--image'
+    - 'asia-northeast3-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cvfactory-server:$COMMIT_SHA'
+    - '--region'
+    - 'asia-northeast3'
+    - '--platform'
+    - 'managed'
+    - '--allow-unauthenticated'
 images:
-- 'asia-northeast3-docker.pkg.dev/$PROJECT_ID/cv-factory/cv-factory-backend:$COMMIT_SHA'
+- 'asia-northeast3-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cvfactory-server:$COMMIT_SHA'
 options:
   logging: CLOUD_LOGGING_ONLY 
