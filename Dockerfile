@@ -31,14 +31,16 @@ RUN python -m playwright install --with-deps chromium
 # non-root 사용자 생성 및 권한 설정
 RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
 
+# Playwright 캐시 디렉토리 생성 및 권한 부여
+RUN mkdir -p /app/.cache/ms-playwright && chown -R appuser:appuser /app/.cache
+
 # non-root 사용자로 전환
 USER appuser
 
-# Playwright 환경 변수 설정 (캐시 디렉토리 변경)
-# 이 경로는 appuser가 소유권을 가지게 될 /app 내부에 위치해야 합니다.
+# Playwright 환경 변수 설정
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
 
-# 브라우저 실행 파일만 다시 설치 (appuser 권한으로, 캐시 경로에)
+# 브라우저 실행 파일만 다시 설치 (appuser 권한으로, 미리 만들어진 캐시 경로에)
 RUN python -m playwright install chromium
 
 # 애플리케이션 코드 복사
