@@ -36,6 +36,10 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # 애플리케이션 코드 복사
 COPY . .
+
+# 로그 디렉토리 생성 및 권한 설정
+RUN mkdir -p /app/logs && chown -R appuser:appuser /app/logs
+
 RUN chown -R appuser:appuser $APP_HOME
 
 # entrypoint.sh 스크립트 복사 및 실행 권한 부여
