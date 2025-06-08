@@ -10,11 +10,11 @@ from tasks.content_filtering import step_3_filter_content
 from tasks.cover_letter_generation import step_4_generate_cover_letter
 from tasks.pipeline_callbacks import handle_pipeline_completion
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("cohere").setLevel(logging.WARNING)
-logging.getLogger("playwright").setLevel(logging.WARNING)
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# logging.getLogger("httpcore").setLevel(logging.WARNING)
+# logging.getLogger("httpx").setLevel(logging.WARNING)
+# logging.getLogger("cohere").setLevel(logging.WARNING)
+# logging.getLogger("playwright").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 

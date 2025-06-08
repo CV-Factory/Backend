@@ -1,8 +1,16 @@
 import os
 from celery import Celery
+from dotenv import load_dotenv
 import logging
 import ssl
 
+from core.logging_config import setup_logging
+setup_logging() # 중앙 로깅 설정 적용
+
+# .env 파일 로드 (Celery 앱 인스턴스 생성 전에 호출)
+load_dotenv()
+
+# 로거 가져오기 (setup_logging 이후에)
 logger = logging.getLogger(__name__)
 
 # Upstash Redis 연결 정보 환경 변수

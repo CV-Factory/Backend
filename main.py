@@ -4,6 +4,9 @@ print(f"Current Working Directory: {os.getcwd()}")
 print(f"sys.path: {sys.path}")
 sys.path.insert(0, "/app") # 모듈 검색 경로에 /app 추가
 
+from core.logging_config import setup_logging
+setup_logging() # 중앙 로깅 설정 적용
+
 import logging
 import importlib.util # importlib.util 추가
 import json # SSE를 위해 추가
@@ -22,8 +25,8 @@ from celery_app import celery_app
 from celery import states
 from enum import Enum
 
-# 로깅 설정
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# 로깅 설정 (이제 core.logging_config에서 관리)
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
