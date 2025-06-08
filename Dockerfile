@@ -28,11 +28,11 @@ RUN uv pip install --no-cache-dir --system -r requirements.txt
 # Playwright 시스템 의존성 우선 설치 (root 권한)
 RUN python -m playwright install --with-deps chromium
 
-# non-root 사용자 생성 및 권한 설정
+# non-root 사용자 생성
 RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
 
-# Playwright 캐시 디렉토리 생성 및 권한 부여
-RUN mkdir -p /app/.cache/ms-playwright && chown -R appuser:appuser /app/.cache
+# 애플리케이션에 필요한 디렉토리 생성 및 권한 사전 부여
+RUN mkdir -p /app/logs /app/.cache/ms-playwright && chown -R appuser:appuser /app/logs /app/.cache
 
 # non-root 사용자로 전환
 USER appuser
@@ -40,28 +40,22 @@ USER appuser
 # Playwright 환경 변수 설정
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
 
-# 브라우저 실행 파일만 다시 설치 (appuser 권한으로, 미리 만들어진 캐시 경로에)
+# 브라우저 실행 파일만 설치 (시스템 의존성은 이미 root로 설치됨)
 RUN python -m playwright install chromium
 
-# 애플리케이션 코드 복사
+# 애플리케이션 코드 복사 (이제 appuser가 소유한 /app에 복사됨)
 COPY --chown=appuser:appuser . .
-
-# 로그 디렉토리 생성
-RUN mkdir -p /app/logs
 
 # 실행 권한 부여
 RUN chmod +x entrypoint.sh
 
-# 포트 노출 (FastAPI 용)
+# 포트 노출
 EXPOSE ${PORT}
 
-# Supervisord 설정을 위해 root로 임시 전환
+# Supervisord 실행을 위해 다시 root로 전환
 USER root
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# 최종 실행은 appuser로
-USER appuser
-
-# Supervisor 실행
-ENTRYPOINT ["./entrypoint.sh"]
+# 컨테이너 시작점
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["all"] 
