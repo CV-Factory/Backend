@@ -3,7 +3,7 @@
   <h1>CVFactory Server</h1>
   <br>
   
-  [![English](https://img.shields.io/badge/language-English-blue.svg)](README.md) [![한국어](https://img.shields.io/badge/language-한국어-red.svg)](README_ko.md)
+[![한국어](https://img.shields.io/badge/language-한국어-red.svg)](README_ko.md)
 </div>
 
 ## 📖 Overview
