@@ -1,4 +1,4 @@
-from celery_app import celery_app
+from api.celery_app import celery_app
 import logging
 import os
 import traceback
@@ -6,14 +6,13 @@ from celery.exceptions import MaxRetriesExceededError, Reject
 from celery import states
 from typing import Dict, Any, Optional
 
-from utils.file_utils import sanitize_filename, try_format_log # ../utils.file_utils -> utils.file_utils
-from utils.celery_utils import _update_root_task_state, get_detailed_error_info
-from generate_cover_letter_semantic import generate_cover_letter
+from api.utils.file_utils import sanitize_filename, try_format_log, get_datetime_prefix, save_content_to_file
+from api.utils.celery_utils import _update_root_task_state, get_detailed_error_info
+from api.generate_cover_letter_semantic import generate_cover_letter
 from langchain_groq import ChatGroq
 from langchain.prompts import ChatPromptTemplate
 from langchain.chains import LLMChain
-from utils.file_utils import get_datetime_prefix, save_content_to_file
-from core.config import settings
+from api.core.config import settings
 
 logger = logging.getLogger(__name__)
 

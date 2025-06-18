@@ -1,4 +1,4 @@
-from celery_app import celery_app
+from api.celery_app import celery_app
 import logging
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 import os
@@ -7,15 +7,16 @@ import uuid
 import traceback
 from celery.exceptions import MaxRetriesExceededError, Reject
 from celery import states
-from utils.playwright_utils import (_get_playwright_page_content_with_iframes_processed,
+from typing import Dict
+from api.utils.playwright_utils import (_get_playwright_page_content_with_iframes_processed,
                                DEFAULT_PAGE_TIMEOUT, PAGE_NAVIGATION_TIMEOUT)
-from utils.file_utils import sanitize_filename, try_format_log
-from utils.celery_utils import _update_root_task_state
+from api.utils.file_utils import sanitize_filename, try_format_log
+from api.utils.celery_utils import _update_root_task_state
 
 logger = logging.getLogger(__name__)
 
 @celery_app.task(bind=True, name='celery_tasks.step_1_extract_html', max_retries=1, default_retry_delay=10)
-def step_1_extract_html(self, url: str, chain_log_id: str) -> dict[str, str]:
+def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
     logger.info("GLOBAL_ENTRY_POINT: step_1_extract_html function called.")
     task_id = self.request.id
     log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step 1_extract_html]"

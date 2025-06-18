@@ -1,14 +1,16 @@
-from celery_app import celery_app
+from api.celery_app import celery_app
 import logging
 import uuid
 from dotenv import load_dotenv
 from celery import chain, signature, states
+from celery.exceptions import Ignore
+import time
 
-from tasks.html_extraction import step_1_extract_html
-from tasks.text_extraction import step_2_extract_text
-from tasks.content_filtering import step_3_filter_content
-from tasks.cover_letter_generation import step_4_generate_cover_letter
-from tasks.pipeline_callbacks import handle_pipeline_completion
+from api.tasks.html_extraction import step_1_extract_html
+from api.tasks.text_extraction import step_2_extract_text
+from api.tasks.content_filtering import step_3_filter_content
+from api.tasks.cover_letter_generation import step_4_generate_cover_letter
+from api.tasks.pipeline_callbacks import handle_pipeline_completion
 
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 # logging.getLogger("httpcore").setLevel(logging.WARNING)

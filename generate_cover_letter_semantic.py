@@ -1,11 +1,14 @@
 import os
 import logging
+from typing import Optional, Union
 from dotenv import load_dotenv
 from langchain_community.vectorstores import FAISS
 from langchain_cohere import CohereEmbeddings
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain.chains import RetrievalQA
 from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 # 로깅 설정
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,7 +33,7 @@ def format_text_by_length(text, length=50):
         logger.error(f"텍스트 포맷팅 중 오류 발생: {e}", exc_info=True)
         return text
 
-def generate_cover_letter(job_posting_content: str, prompt: str | None = None):
+def generate_cover_letter(job_posting_content: str, prompt: Union[str, None] = None):
     logger.debug("자기소개서 생성 함수 시작...")
     
     if not prompt or not prompt.strip():
@@ -51,7 +54,7 @@ def generate_cover_letter(job_posting_content: str, prompt: str | None = None):
     if load_dotenv():
         logger.debug(".env 파일 로드 성공 (generate_cover_letter 내부)")
     else:
-        logger.warning(".env 파일 로드 실패 또는 찾을 수 없음 (generate_cover_letter 내부)")
+        logger.warning(".env 파일이 없거나 비어 있습니다. API 키에 대해 환경 변수를 신뢰합니다.")
 
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     COHERE_API_KEY = os.getenv("COHERE_API_KEY")

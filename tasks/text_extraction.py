@@ -1,4 +1,4 @@
-from celery_app import celery_app
+from api.celery_app import celery_app
 import logging
 import os
 import re
@@ -6,8 +6,8 @@ from bs4 import BeautifulSoup, Comment, NavigableString
 import traceback
 from celery import states
 from typing import Dict
-from utils.file_utils import sanitize_filename, try_format_log
-from utils.celery_utils import _update_root_task_state
+from api.utils.file_utils import sanitize_filename, try_format_log
+from api.utils.celery_utils import _update_root_task_state
 from celery.exceptions import MaxRetriesExceededError, Reject
 
 logger = logging.getLogger(__name__)

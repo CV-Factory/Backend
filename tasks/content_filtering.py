@@ -1,4 +1,4 @@
-from celery_app import celery_app
+from api.celery_app import celery_app
 import logging
 import os
 import traceback
@@ -9,8 +9,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import time
 
-from utils.file_utils import sanitize_filename
-from utils.celery_utils import _update_root_task_state
+from api.utils.file_utils import sanitize_filename
+from api.utils.celery_utils import _update_root_task_state
 
 logger = logging.getLogger(__name__)
 
