@@ -158,7 +158,7 @@ This project uses GitHub Actions for its CI/CD pipeline. Previously, Google Clou
 ├── cloudbuild.yaml   # Google Cloud Build configuration file for CI/CD
 ├── request_body.json # Example JSON payload for API requests
 ├── .gitignore        # Specifies intentionally untracked files that Git should ignore
-├── LICENSE           # License file (CC BY NC 4.0)
+├── LICENSE           # License file (All rights reserved)
 ├── README.md         # English README file (This file)
 ├── README_ko.md      # Korean README file
 ├── core/             # Core utilities and configurations for the application
@@ -169,7 +169,7 @@ This project uses GitHub Actions for its CI/CD pipeline. Previously, Google Clou
 
 ## 📄 License
 
-CC BY NC 4.0
+All rights reserved
 
 ## 📬 Contact
 
