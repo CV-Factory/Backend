@@ -11,15 +11,16 @@ import time
 
 from api.utils.file_utils import sanitize_filename
 from api.utils.celery_utils import _update_root_task_state
+from api.utils.prompt_registry import SYS_PROMPTS, NO_JOB_TEXT_MSG
 
 logger = logging.getLogger(__name__)
 
 @celery_app.task(bind=True, name='celery_tasks.step_3_filter_content', max_retries=1, default_retry_delay=15)
-def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) -> Dict[str, str]:
+def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str, language: str = "en") -> Dict[str, str]:
     """(3단계) 추출된 텍스트를 LLM으로 필터링하고 새 파일에 저장합니다."""
     task_id = self.request.id
     step_log_id = "3_filter_content"
-    log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id}]"
+    log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id} / Lang {language}]"
     logger.info(f"{log_prefix} ---------- Task started. Received prev_result_keys: {list(prev_result.keys()) if isinstance(prev_result, dict) else type(prev_result)} ----------")
 
     if not isinstance(prev_result, dict) or "extracted_text" not in prev_result:
@@ -91,11 +92,7 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
             chat = ChatGroq(temperature=0, groq_api_key=groq_api_key, model_name=llm_model)
             logger.debug(f"{log_prefix} ChatGroq client initialized: {chat}")
 
-            sys_prompt = ("당신은 전문적인 텍스트 처리 도우미입니다. 당신의 임무는 제공된 텍스트에서 핵심 채용공고 내용만 추출하는 것입니다. "
-                          "광고, 회사 홍보, 탐색 링크, 사이드바, 헤더, 푸터, 법적 고지, 쿠키 알림, 관련 없는 기사 등 직무의 책임, 자격, 혜택과 직접적인 관련이 없는 모든 불필요한 정보는 제거하십시오. "
-                          "결과는 깨끗하고 읽기 쉬운 일반 텍스트로 제시해야 합니다. 마크다운 형식을 사용하지 마십시오. 실제 채용 내용에 집중하십시오. "
-                          "만약 텍스트가 채용공고가 아닌 것 같거나, 의미 있는 채용 정보를 추출하기에 너무 손상된 경우, 정확히 '추출할 채용공고 내용 없음' 이라는 문구로 응답하고 다른 내용은 포함하지 마십시오. "
-                          "모든 응답은 반드시 한국어로 작성되어야 합니다.")
+            sys_prompt = SYS_PROMPTS["CONTENT_FILTERING"][language]
             human_template = "{text_content}"
             prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("human", human_template)])
             parser = StrOutputParser()
@@ -171,7 +168,8 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
                 )
                 raise
 
-            if filtered_content.strip() == "추출할 채용공고 내용 없음":
+            no_job_msg = NO_JOB_TEXT_MSG[language]
+            if filtered_content.strip() == no_job_msg:
                 logger.warning(f"{log_prefix} LLM reported no extractable job content.")
                 filtered_content = "<!-- LLM 분석: 추출할 채용공고 내용 없음 -->"
 

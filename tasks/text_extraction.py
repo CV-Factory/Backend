@@ -13,11 +13,11 @@ from celery.exceptions import MaxRetriesExceededError, Reject
 logger = logging.getLogger(__name__)
 
 @celery_app.task(bind=True, name='celery_tasks.step_2_extract_text', max_retries=1, default_retry_delay=5)
-def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str) -> Dict[str, str]:
+def step_2_extract_text(self, prev_result: Dict[str, str], chain_log_id: str, language: str = "en") -> Dict[str, str]:
     """(2단계) 저장된 HTML 파일에서 텍스트를 추출하여 새 파일에 저장합니다."""
     task_id = self.request.id
     step_log_id = "2_extract_text"
-    log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id}]"
+    log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step {step_log_id} / Lang {language}]"
     logger.info(f"{log_prefix} ---------- Task started. Received prev_result_keys: {list(prev_result.keys()) if isinstance(prev_result, dict) else type(prev_result)} ----------")
 
     if not isinstance(prev_result, dict) or 'page_content' not in prev_result or 'html_file_path' not in prev_result or 'original_url' not in prev_result:

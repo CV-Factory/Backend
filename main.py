@@ -5,7 +5,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -74,6 +74,24 @@ async def startup_event():
 async def shutdown_event():
     logger.info("FastAPI application shutting down.")
 
+# Helper to select language from Accept-Language header
+
+def _select_language_by_header(accept_language: str | None) -> str:
+    """Return 'ko' or 'en' based on Accept-Language header (default 'en')."""
+    try:
+        if not accept_language:
+            return "en"
+        for lang_chunk in accept_language.split(','):
+            code = lang_chunk.split(';')[0].strip().lower()
+            # Prioritize exact matches
+            if code.startswith('ko'):
+                return "ko"
+            if code.startswith('en'):
+                return "en"
+    except Exception as e:
+        logger.warning(f"[LANG_SELECT] Error parsing Accept-Language: {e}. Falling back to 'en'.")
+    return "en"
+
 # --- 라우트(Routes) ---
 
 @app.get("/", response_class=HTMLResponse)
@@ -82,12 +100,18 @@ async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/create-cover-letter", status_code=202)
-async def create_cover_letter(request: StartTaskRequest):
+async def create_cover_letter(
+    request: StartTaskRequest,
+    accept_language: str | None = Header(None, convert_underscores=False)
+):
     """자기소개서 생성 파이프라인을 시작합니다."""
     try:
+        lang_code = _select_language_by_header(accept_language)
+        logger.info(f"[API] Accept-Language: {accept_language} -> selected '{lang_code}'")
         task_id = process_job_posting_pipeline(
             url=request.job_url,
-            user_prompt_text=request.user_story
+            user_prompt_text=request.user_story,
+            language=lang_code
         )
         logger.info(f"Cover letter generation task started. URL: {request.job_url}, Task ID: {task_id}")
         return {"task_id": task_id}

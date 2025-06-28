@@ -13,6 +13,7 @@ from langchain_groq import ChatGroq
 from langchain.prompts import ChatPromptTemplate
 from langchain.chains import LLMChain
 from api.core.config import settings
+from api.utils.prompt_registry import DEFAULT_USER_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +26,11 @@ except Exception as e:
     llm = None
 
 @celery_app.task(bind=True, name='celery_tasks.step_4_generate_cover_letter', max_retries=1, default_retry_delay=20)
-def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id: str, user_prompt_text: Optional[str]) -> Dict[str, Any]:
+def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id: str, user_prompt_text: Optional[str], language: str = "en") -> Dict[str, Any]:
     """Celery 작업: 필터링된 텍스트와 사용자 프롬프트를 기반으로 자기소개서를 생성하고 저장합니다."""
     task_id = self.request.id
     root_task_id = chain_log_id
-    log_prefix = f"[Task {task_id} / Root {root_task_id} / Step 4_generate_cover_letter]"
+    log_prefix = f"[Task {task_id} / Root {root_task_id} / Step 4_generate_cover_letter / Lang {language}]"
     logger.info(f"{log_prefix} ---------- Task started. Received prev_result: { {k: (v[:100] + '...' if isinstance(v, str) and len(v) > 100 else v) for k, v in prev_result.items()} }, User Prompt: {'Provided' if user_prompt_text else 'Not provided'} ----------")
 
     filtered_content = prev_result.get("filtered_content")
@@ -85,10 +86,12 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
             }
         )
 
-        # generate_cover_letter_semantic 모듈의 함수를 직접 호출
+        # Use default prompt if user_prompt_text not provided
+        effective_prompt = user_prompt_text if user_prompt_text else DEFAULT_USER_PROMPT[language]
+
         generated_text_tuple = generate_cover_letter(
             job_posting_content=filtered_content,
-            prompt=user_prompt_text
+            prompt=effective_prompt
         )
         cover_letter_text = generated_text_tuple[0] # 첫 번째 요소를 사용
         # formatted_cv = generated_text_tuple[1] # 포맷팅된 버전, 필요시 사용

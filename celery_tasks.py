@@ -28,19 +28,19 @@ try:
 except Exception as e_dotenv:
     logger.error(f"Error loading .env file: {e_dotenv}", exc_info=True)
 
-def process_job_posting_pipeline(url: str, user_prompt_text: str = None, root_task_id: str = None) -> str:
+def process_job_posting_pipeline(url: str, user_prompt_text: str = None, language: str = "en", root_task_id: str = None) -> str:
     """주어진 URL에 대해 전체 채용공고 처리 파이프라인을 시작합니다."""
     if not root_task_id:
         root_task_id = str(uuid.uuid4())
     
     log_prefix = f"[PipelineTrigger / Root {root_task_id}]"
-    logger.info(f"{log_prefix} 파이프라인 시작 요청. URL: {url}, User Prompt: {'Yes' if user_prompt_text else 'No'}")
+    logger.info(f"{log_prefix} 파이프라인 시작 요청. URL: {url}, Lang: {language}, User Prompt: {'Yes' if user_prompt_text else 'No'}")
 
     pipeline = chain(
-        step_1_extract_html.s(url=url, chain_log_id=root_task_id),
-        step_2_extract_text.s(chain_log_id=root_task_id),
-        step_3_filter_content.s(chain_log_id=root_task_id),
-        step_4_generate_cover_letter.s(chain_log_id=root_task_id, user_prompt_text=user_prompt_text)
+        step_1_extract_html.s(url=url, chain_log_id=root_task_id, language=language),
+        step_2_extract_text.s(chain_log_id=root_task_id, language=language),
+        step_3_filter_content.s(chain_log_id=root_task_id, language=language),
+        step_4_generate_cover_letter.s(chain_log_id=root_task_id, user_prompt_text=user_prompt_text, language=language)
     )
 
     on_success_sig = handle_pipeline_completion.s(root_task_id=root_task_id, is_success=True)

@@ -16,10 +16,10 @@ from api.utils.celery_utils import _update_root_task_state
 logger = logging.getLogger(__name__)
 
 @celery_app.task(bind=True, name='celery_tasks.step_1_extract_html', max_retries=1, default_retry_delay=10)
-def step_1_extract_html(self, url: str, chain_log_id: str) -> Dict[str, str]:
+def step_1_extract_html(self, url: str, chain_log_id: str, language: str = "en") -> Dict[str, str]:
     logger.info("GLOBAL_ENTRY_POINT: step_1_extract_html function called.")
     task_id = self.request.id
-    log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step 1_extract_html]"
+    log_prefix = f"[Task {task_id} / Root {chain_log_id} / Step 1_extract_html / Lang {language}]"
     logger.info(f"{log_prefix} ---------- Task started. URL: {url} ----------")
     logger.debug(f"{log_prefix} Input URL: {url}, Chain Log ID: {chain_log_id}")
 
