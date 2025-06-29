@@ -15,18 +15,14 @@ if [ "$1" = "all" ]; then
   echo "Starting supervisor to manage all services (Redis, FastAPI, Celery worker)..."
   exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf
 elif [ "$1" = "web" ]; then
-  # 이 옵션은 supervisord.conf 를 통해 관리되므로, 직접 실행할 일은 줄어들지만,
-  # 개별 테스트 등을 위해 남겨둘 수 있습니다.
   echo "Starting FastAPI web server directly on port $PORT..."
   exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --log-level info
 elif [ "$1" = "worker" ]; then
-  # 이 옵션도 supervisord.conf 를 통해 관리됩니다.
   echo "Starting Celery worker directly..."
   CONCURRENCY=${WORKER_CONCURRENCY:-1}
   echo "Celery worker concurrency: $CONCURRENCY"
   exec celery -A $APP_MODULE worker -l info --concurrency=$CONCURRENCY
 elif [ "$1" = "beat" ]; then
-  # 이 옵션도 supervisord.conf 를 통해 관리됩니다. (필요시 주석 해제)
   echo "Starting Celery beat scheduler directly..."
   exec celery -A $APP_MODULE beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
 else
