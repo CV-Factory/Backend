@@ -10,6 +10,8 @@ from utils.logging_utils import configure_logging
 
 # 로깅 설정 (stdout INFO / stderr ERROR)
 configure_logging()
+logger = logging.getLogger(__name__)
+logger.propagate = False  # 중복 로그 방지
 
 def format_text_by_length(text, length=50):
     logger.debug(f"{length}자 단위로 텍스트 포맷팅 시도...")
