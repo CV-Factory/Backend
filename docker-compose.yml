@@ -17,7 +17,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - PORT=8000
       - PYTHONPATH=/app
-    command: ["./entrypoint.sh", "web"]
+    command: ["web"]
     depends_on:
       - redis
 
@@ -29,6 +29,6 @@ services:
       - PYTHONUNBUFFERED=1
       - REDIS_URL=redis://redis:6379/0
       - PYTHONPATH=/app
-    command: ["./entrypoint.sh", "worker"]
+    command: ["worker"]
     depends_on:
       - redis
