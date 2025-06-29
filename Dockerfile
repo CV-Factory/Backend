@@ -33,8 +33,7 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # 애플리케이션 코드 및 entrypoint 복사
 COPY . .
-# Windows 줄바꿈(
-) 제거 후 실행 권한 부여
+# Windows 줄바꿈(\r) 제거 후 실행 권한 부여
 RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 
 # 포트 노출 (FastAPI 용)
