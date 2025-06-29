@@ -50,4 +50,14 @@ def configure_logging() -> None:
     stderr_handler.setFormatter(formatter)
 
     root.addHandler(stdout_handler)
-    root.addHandler(stderr_handler) 
+    root.addHandler(stderr_handler)
+
+    # Prevent duplicate log entries from Celery / Uvicorn child loggers
+    for noisy_logger_name in [
+        "celery",  # Celery worker internal logger
+        "celery.worker",  # more granular celery loggers
+        "uvicorn",
+        "uvicorn.error",
+        "uvicorn.access",
+    ]:
+        logging.getLogger(noisy_logger_name).propagate = False 

@@ -2,6 +2,7 @@ import os
 from celery import Celery
 import logging
 import ssl
+from celery.signals import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,18 @@ celery_app.conf.update(
 logger.info("Celery app configuration updated.")
 
 app = celery_app # main.py에서 import app 할 수 있도록 추가
+
+@setup_logging.connect
+def _remove_celery_default_handlers(**_):
+    """Prevent Celery from adding its own StreamHandlers that duplicate output.
+
+    We keep our custom root logger stdout / stderr split, so Celery's extra
+    handlers are redundant. Clearing them avoids each log line being emitted
+    twice when docker-compose merges stdout & stderr.
+    """
+    celery_logger = logging.getLogger("celery")
+    celery_logger.handlers.clear()
+    celery_logger.propagate = False  # send records only once via root handlers
 
 if __name__ == '__main__':
     # 이 파일은 직접 실행되지 않고, 'celery -A celery_app.celery_app worker -l info' 와 같이 CLI로 워커를 실행합니다.
