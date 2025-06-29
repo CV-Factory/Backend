@@ -138,7 +138,7 @@ def step_3_filter_content(self, prev_result: Dict[str, str], chain_log_id: str) 
             )
 
             try:
-                logger.info(f"{log_prefix} >>> Attempting llm_chain.invoke NOW...")
+                logger.info(f"{log_prefix} Attempting llm_chain.invoke() ...")
                 start_time_llm_invoke = time.time()
                 filtered_content = llm_chain.invoke({"text_content": text_for_llm})
                 end_time_llm_invoke = time.time()
