@@ -17,7 +17,7 @@ RUN apt-get update && \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
     libpango-1.0-0 libcairo2 \
-    supervisor curl && \
+    supervisor curl dos2unix && \
     rm -rf /var/lib/apt/lists/*
 
 # requirements.txt 복사 및 패키지 설치
@@ -34,7 +34,7 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 # 애플리케이션 코드 및 entrypoint 복사
 COPY . .
 # Windows 줄바꿈(\r) 제거 후 실행 권한 부여
-RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
+RUN dos2unix entrypoint.sh && chmod +x entrypoint.sh
 
 # 포트 노출 (FastAPI 용)
 EXPOSE ${PORT}
