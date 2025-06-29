@@ -5,6 +5,7 @@ import traceback
 from celery.exceptions import MaxRetriesExceededError, Reject
 from celery import states
 from typing import Dict, Any, Optional
+from multiprocessing import current_process
 
 from utils.file_utils import sanitize_filename, try_format_log # ../utils.file_utils -> utils.file_utils
 from utils.celery_utils import _update_root_task_state, get_detailed_error_info
@@ -20,7 +21,8 @@ logger = logging.getLogger(__name__)
 # LLM 모델 초기화 (모듈 레벨에서 한 번만)
 try:
     llm = ChatGroq(groq_api_key=settings.GROQ_API_KEY, model_name=settings.GROQ_LLM_MODEL)
-    logger.info("ChatGroq model loaded successfully during module initialization.")
+    if current_process().name == "MainProcess":
+        logger.info("ChatGroq model loaded successfully during module initialization.")
 except Exception as e:
     logger.error(f"Failed to load ChatGroq model during module initialization: {e}")
     llm = None

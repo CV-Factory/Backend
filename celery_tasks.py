@@ -3,6 +3,7 @@ import logging, os
 import uuid
 from dotenv import load_dotenv
 from celery import chain, signature, states
+from multiprocessing import current_process
 
 from tasks.html_extraction import step_1_extract_html
 from tasks.text_extraction import step_2_extract_text
@@ -23,13 +24,18 @@ logging.getLogger("playwright").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
+# 중복 로그 방지를 위해 메인 프로세스에서만 .env 로딩 결과를 기록
+_is_main = current_process().name == "MainProcess"
 try:
     if load_dotenv():
-        logger.info(".env file loaded successfully by dotenv.")
+        if _is_main:
+            logger.info(".env file loaded successfully by dotenv.")
     else:
-        logger.warning(".env file not found or empty. Trusting environment variables for API keys.")
+        if _is_main:
+            logger.warning(".env file not found or empty. Trusting environment variables for API keys.")
 except Exception as e_dotenv:
-    logger.error(f"Error loading .env file: {e_dotenv}", exc_info=True)
+    if _is_main:
+        logger.error(f"Error loading .env file: {e_dotenv}", exc_info=True)
 
 def process_job_posting_pipeline(url: str, user_prompt_text: str = None, root_task_id: str = None) -> str:
     """주어진 URL에 대해 전체 채용공고 처리 파이프라인을 시작합니다."""
