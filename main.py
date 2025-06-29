@@ -5,6 +5,7 @@ print(f"sys.path: {sys.path}")
 sys.path.insert(0, "/app") # 모듈 검색 경로에 /app 추가
 
 import logging, os
+from utils.logging_utils import configure_logging
 import importlib.util # importlib.util 추가
 import json # SSE를 위해 추가
 import asyncio # SSE를 위해 추가
@@ -22,13 +23,8 @@ from celery_app import celery_app
 from celery import states
 from enum import Enum
 
-# 로깅 설정 (환경 변수 LOG_LEVEL, 기본 INFO)
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=getattr(logging, log_level, logging.INFO),
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    force=True,
-)
+# 로깅 설정: stdout INFO / stderr ERROR 이상
+configure_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI()

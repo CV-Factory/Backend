@@ -6,11 +6,10 @@ from langchain_cohere import CohereEmbeddings
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain.chains import RetrievalQA
 from langchain_groq import ChatGroq
+from utils.logging_utils import configure_logging
 
-# 로깅 설정 (LOG_LEVEL 환경 변수 기반, 기본 INFO)
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format='%(asctime)s - %(levelname)s - %(message)s', force=False)
-logger = logging.getLogger(__name__)
+# 로깅 설정 (stdout INFO / stderr ERROR)
+configure_logging()
 
 def format_text_by_length(text, length=50):
     logger.debug(f"{length}자 단위로 텍스트 포맷팅 시도...")
