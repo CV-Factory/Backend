@@ -17,6 +17,7 @@ from utils.file_utils import get_datetime_prefix, save_content_to_file
 from core.config import settings
 
 logger = logging.getLogger(__name__)
+logger.propagate = False
 
 # LLM 모델 초기화 (모듈 레벨에서 한 번만)
 try:

@@ -23,6 +23,7 @@ logging.getLogger("cohere").setLevel(logging.WARNING)
 logging.getLogger("playwright").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+logger.propagate = False
 
 # 중복 로그 방지를 위해 메인 프로세스에서만 .env 로딩 결과를 기록
 _is_main = current_process().name == "MainProcess"
