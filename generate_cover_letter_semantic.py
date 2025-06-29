@@ -7,8 +7,9 @@ from langchain_experimental.text_splitter import SemanticChunker
 from langchain.chains import RetrievalQA
 from langchain_groq import ChatGroq
 
-# 로깅 설정
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# 로깅 설정 (LOG_LEVEL 환경 변수 기반, 기본 INFO)
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format='%(asctime)s - %(levelname)s - %(message)s', force=False)
 logger = logging.getLogger(__name__)
 
 def format_text_by_length(text, length=50):
