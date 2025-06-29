@@ -1,5 +1,5 @@
 from celery_app import celery_app
-import logging
+import logging, os
 import uuid
 from dotenv import load_dotenv
 from celery import chain, signature, states
@@ -10,7 +10,12 @@ from tasks.content_filtering import step_3_filter_content
 from tasks.cover_letter_generation import step_4_generate_cover_letter
 from tasks.pipeline_callbacks import handle_pipeline_completion
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True,  # 기존 설정 덮어쓰기
+)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("cohere").setLevel(logging.WARNING)
