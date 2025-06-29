@@ -31,12 +31,11 @@ RUN python -m playwright install --with-deps chromium
 # Supervisor 설정 파일 복사
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# 애플리케이션 코드 복사
+# 애플리케이션 코드 및 entrypoint 복사
 COPY . .
-
-# entrypoint.sh 스크립트 복사 및 실행 권한 부여
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
+# Windows 줄바꿈(
+) 제거 후 실행 권한 부여
+RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 
 # 포트 노출 (FastAPI 용)
 EXPOSE ${PORT}
