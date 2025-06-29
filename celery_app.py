@@ -99,6 +99,7 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='Asia/Seoul', # 시간대 설정
     enable_utc=True,
+    worker_hijack_root_logger=False,  # 중복 로그 방지
     # 작업 재시도 설정 등
     task_acks_late = True, # 작업 완료 후 ack (메시지 손실 방지)
     worker_prefetch_multiplier = 1 # 한번에 하나의 작업만 가져오도록 (Playwright 같은 리소스 집중 작업에 유리할 수 있음)
