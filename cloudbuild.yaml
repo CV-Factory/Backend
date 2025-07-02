@@ -1,0 +1,44 @@
+# Cloud Build configuration: Build Docker image and deploy to Cloud Run
+substitutions:
+  _REGION: "asia-northeast3"
+  _SERVICE_NAME: "cvfactory-server"
+  _IMAGE_NAME: "cv-factory/backend"
+
+steps:
+  # 1) Build the container image
+  - name: "gcr.io/cloud-builders/docker"
+    id: "Build image"
+    args:
+      - "build"
+      - "-t"
+      - "asia.gcr.io/${PROJECT_ID}/${_IMAGE_NAME}:${COMMIT_SHA}"
+      - "."
+
+  # 2) Push the image to Artifact Registry (asia.gcr.io)
+  - name: "gcr.io/cloud-builders/docker"
+    id: "Push image"
+    args:
+      - "push"
+      - "asia.gcr.io/${PROJECT_ID}/${_IMAGE_NAME}:${COMMIT_SHA}"
+
+  # 3) Deploy the image to Cloud Run
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    id: "Deploy to Cloud Run"
+    args:
+      - "run"
+      - "deploy"
+      - "${_SERVICE_NAME}"
+      - "--image=asia.gcr.io/${PROJECT_ID}/${_IMAGE_NAME}:${COMMIT_SHA}"
+      - "--region=${_REGION}"
+      - "--platform=managed"
+      - "--allow-unauthenticated"
+      - "--port=8000"
+      - "--cpu=1"
+      - "--memory=2Gi"
+      - "--min-instances=0"
+      - "--max-instances=1"
+
+# (Optional) Specify the images to be pushed; useful for Container Analysis/Kubernetes Engine integrations
+images:
+  - "asia.gcr.io/${PROJECT_ID}/${_IMAGE_NAME}:${COMMIT_SHA}" 
