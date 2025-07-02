@@ -39,6 +39,10 @@ steps:
       - "--min-instances=0"
       - "--max-instances=1"
 
+# Cloud Build options
+options:
+  logging: CLOUD_LOGGING_ONLY
+
 # (Optional) Specify the images to be pushed; useful for Container Analysis/Kubernetes Engine integrations
 images:
   - "asia.gcr.io/${PROJECT_ID}/${_IMAGE_NAME}:${COMMIT_SHA}" 
