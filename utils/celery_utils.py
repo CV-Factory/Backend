@@ -43,7 +43,40 @@ def _update_root_task_state(root_task_id: str, state: str, meta: Optional[Dict[s
             # SUCCESS 상태일 경우, 전달된 meta로 덮어쓴다.
             final_meta_for_update = current_meta_to_store
             logger.info(f"{log_prefix} SUCCESS 상태. meta를 병합하지 않고 전달된 값으로 덮어씁니다: {try_format_log(final_meta_for_update)}")
-        else: # SUCCESS 상태가 아닐 때만 기존 meta와 병합
+        elif state == states.FAILURE:
+            # Celery는 FAILURE 상태일 때 result 에 Exception 정보를 예상합니다.
+            # exc 객체가 전달되지 않았다면, meta 또는 traceback 정보를 이용해 임시 Exception 생성
+            if exc is None:
+                generated_msg = try_format_log(current_meta_to_store) or "Unknown error (no meta)"
+                exc = ValueError(generated_msg)
+                logger.warning(f"{log_prefix} FAILURE 상태인데 exc 가 None 입니다. ValueError 로 대체: {generated_msg}")
+            # mark_as_failure 는 result 에 예외를 올바르게 직렬화해줍니다.
+            try:
+                celery_app_instance.backend.mark_as_failure(
+                    task_id=root_task_id,
+                    exc=exc,
+                    traceback=traceback_str or traceback.format_exc()
+                )
+                logger.info(f"{log_prefix} backend.mark_as_failure 호출 완료. Exception: {exc}")
+                return  # FAILURE 처리 후 조기 종료
+            except Exception as mark_fail_err:
+                # 기존 메타가 손상되어 mark_as_failure 내부에서 오류가 날 수 있음.
+                # 안전 장치: WARNING 로그 후 store_result로 직접 FAILURE 기록
+                logger.warning(f"{log_prefix} backend.mark_as_failure 실패: {mark_fail_err}. Fallback to store_result.", exc_info=True)
+                celery_app_instance.backend.store_result(
+                    task_id=root_task_id,
+                    result={
+                        'exc_type': type(exc).__name__,
+                        'exc_message': str(exc),
+                        'exc_module': type(exc).__module__,
+                        'fallback_mark_failure_error': str(mark_fail_err),
+                        **(current_meta_to_store if isinstance(current_meta_to_store, dict) else {})
+                    },
+                    state=states.FAILURE,
+                    traceback=traceback_str or traceback.format_exc()
+                )
+                return
+        else: # SUCCESS/FAILURE 외 상태
             try:
                 # 기존 메타를 직접 가져오기보다는, 새로운 정보로 덮어쓰거나 추가하는 로직에 집중합니다.
                 # Celery의 상태 업데이트는 보통 새로운 정보로 기존 정보를 대체하는 방식입니다.

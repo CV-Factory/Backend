@@ -1,11 +1,17 @@
-import logging
+import sys
 import os
-import uuid
-import asyncio
+print(f"Current Working Directory: {os.getcwd()}")
+print(f"sys.path: {sys.path}")
+sys.path.insert(0, "/app") # 모듈 검색 경로에 /app 추가
+
+import logging
+from utils.logging_utils import configure_logging
+import importlib.util
 import json
+import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException, Header, status, Query, Path as FsPath, Form, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -16,11 +22,10 @@ from celery import current_app, states
 from celery.result import AsyncResult
 from sse_starlette.sse import EventSourceResponse
 
-from api.logging_config import setup_logging
-from api.celery_tasks import process_job_posting_pipeline
+from celery_tasks import process_job_posting_pipeline
 
-# 로깅 설정
-setup_logging()
+# 로깅 설정: stdout INFO / stderr ERROR 이상
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # 경로 설정

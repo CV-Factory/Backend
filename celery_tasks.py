@@ -1,34 +1,43 @@
-from api.celery_app import celery_app
+from celery_app import celery_app
 import logging
+import os
 import uuid
 from dotenv import load_dotenv
 from celery import chain, signature, states
 from celery.exceptions import Ignore
 import time
+from multiprocessing import current_process
+from utils.logging_utils import configure_logging
+from typing import Optional
 
-from api.tasks.html_extraction import step_1_extract_html
-from api.tasks.text_extraction import step_2_extract_text
-from api.tasks.content_filtering import step_3_filter_content
-from api.tasks.cover_letter_generation import step_4_generate_cover_letter
-from api.tasks.pipeline_callbacks import handle_pipeline_completion
+from tasks.html_extraction import step_1_extract_html
+from tasks.text_extraction import step_2_extract_text
+from tasks.content_filtering import step_3_filter_content
+from tasks.cover_letter_generation import step_4_generate_cover_letter
+from tasks.pipeline_callbacks import handle_pipeline_completion
 
-# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-# logging.getLogger("httpcore").setLevel(logging.WARNING)
-# logging.getLogger("httpx").setLevel(logging.WARNING)
-# logging.getLogger("cohere").setLevel(logging.WARNING)
-# logging.getLogger("playwright").setLevel(logging.WARNING)
+configure_logging()
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("cohere").setLevel(logging.WARNING)
+logging.getLogger("playwright").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+logger.propagate = False
 
+_is_main = current_process().name == "MainProcess"
 try:
     if load_dotenv():
-        logger.info(".env file loaded successfully by dotenv.")
+        if _is_main:
+            logger.info(".env file loaded successfully by dotenv.")
     else:
-        logger.warning(".env file not found or empty. Trusting environment variables for API keys.")
+        if _is_main:
+            logger.warning(".env file not found or empty. Trusting environment variables for API keys.")
 except Exception as e_dotenv:
-    logger.error(f"Error loading .env file: {e_dotenv}", exc_info=True)
+    if _is_main:
+        logger.error(f"Error loading .env file: {e_dotenv}", exc_info=True)
 
-def process_job_posting_pipeline(url: str, user_prompt_text: str = None, language: str = "en", root_task_id: str = None) -> str:
+def process_job_posting_pipeline(url: str, user_prompt_text: Optional[str] = None, language: str = "en", root_task_id: Optional[str] = None) -> str:
     """주어진 URL에 대해 전체 채용공고 처리 파이프라인을 시작합니다."""
     if not root_task_id:
         root_task_id = str(uuid.uuid4())

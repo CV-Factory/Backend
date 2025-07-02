@@ -3,6 +3,7 @@ from celery import Celery
 from dotenv import load_dotenv
 import logging
 import ssl
+from celery.signals import setup_logging
 
 from api.logging_config import setup_logging
 setup_logging() # 중앙 로깅 설정 적용
@@ -106,6 +107,7 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='Asia/Seoul', # 시간대 설정
     enable_utc=True,
+    worker_hijack_root_logger=False,  # 중복 로그 방지
     # 작업 재시도 설정 등
     task_acks_late = True, # 작업 완료 후 ack (메시지 손실 방지)
     worker_prefetch_multiplier = 1 # 한번에 하나의 작업만 가져오도록 (Playwright 같은 리소스 집중 작업에 유리할 수 있음)
@@ -113,6 +115,18 @@ celery_app.conf.update(
 logger.info("Celery app configuration updated.")
 
 app = celery_app # main.py에서 import app 할 수 있도록 추가
+
+@setup_logging.connect
+def _remove_celery_default_handlers(**_):
+    """Prevent Celery from adding its own StreamHandlers that duplicate output.
+
+    We keep our custom root logger stdout / stderr split, so Celery's extra
+    handlers are redundant. Clearing them avoids each log line being emitted
+    twice when docker-compose merges stdout & stderr.
+    """
+    celery_logger = logging.getLogger("celery")
+    celery_logger.handlers.clear()
+    celery_logger.propagate = False  # send records only once via root handlers
 
 if __name__ == '__main__':
     # 이 파일은 직접 실행되지 않고, 'celery -A celery_app.celery_app worker -l info' 와 같이 CLI로 워커를 실행합니다.
