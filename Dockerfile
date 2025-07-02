@@ -2,10 +2,10 @@
 FROM python:3.11-slim
 
 # 환경 변수 설정
-ENV PYTHONUNBUFFERED True
-ENV APP_HOME /app
-ENV PYTHONPATH "/app"
-ENV PORT 8080
+ENV PYTHONUNBUFFERED=True
+ENV APP_HOME=/app
+ENV PYTHONPATH=/app
+ENV PORT=8080
 # Celery가 사용할 Redis URL (컨테이너 내부 Redis 사용 예정이므로 주석 처리 또는 localhost로 변경)
 # ENV REDIS_URL redis://your-redis-host:6379/0 
 
