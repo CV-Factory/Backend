@@ -101,8 +101,15 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         if not cover_letter_text or "생성 실패" in cover_letter_text or len(cover_letter_text) < 50: # 최소 길이 조건 추가
             error_message_llm = f"LLM cover letter generation failed or returned invalid content. Response: {try_format_log(cover_letter_text)}" # try_format_log 사용
             logger.error(f"{log_prefix} {error_message_llm}")
-            # 실패 상태 업데이트
-            self.update_state(state=states.FAILURE, meta={'current_step': '오류: 자기소개서 생성 중 LLM 응답에 문제가 발생했습니다.', 'percentage': 50, 'error': error_message_llm, 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_GENERATION_LLM_FAILED'})
+            # 진행 상태로 업데이트(실패 세부 정보 포함). 실제 실패 처리는 예외를 raise 하여 Celery가 담당하게 한다.
+            self.update_state(state='PROGRESS',
+                               meta={
+                                   'current_step': '오류: 자기소개서 생성 중 LLM 응답에 문제가 발생했습니다.',
+                                   'percentage': 50,
+                                   'error': error_message_llm,
+                                   'current_task_id': task_id,
+                                   'pipeline_step': 'COVER_LETTER_GENERATION_LLM_FAILED'
+                               })
             _update_root_task_state(
                 root_task_id=root_task_id, 
                 state=states.FAILURE, 
@@ -185,8 +192,15 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
 
     except ValueError as e_val:
         logger.error(f"{log_prefix} ValueError in step 4: {e_val}", exc_info=True)
-        # 실패 상태 업데이트
-        self.update_state(state=states.FAILURE, meta={'current_step': f'오류: 자기소개서 생성 중 값 관련 문제가 발생했습니다. ({str(e_val)})', 'error': str(e_val), 'type': 'ValueError', 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'})
+        # Celery가 예외를 보고 FAILURE 로 전환하도록 'PROGRESS' 상태로만 남겨 둔다.
+        self.update_state(state='PROGRESS',
+                           meta={
+                               'current_step': f'오류: 자기소개서 생성 중 값 관련 문제가 발생했습니다. ({str(e_val)})',
+                               'error': str(e_val),
+                               'type': 'ValueError',
+                               'current_task_id': task_id,
+                               'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'
+                           })
         _update_root_task_state(
             root_task_id=root_task_id, 
             state=states.FAILURE, 
@@ -206,8 +220,15 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
     except MaxRetriesExceededError as e_max_retries: # LLM 호출 관련 재시도 초과 (generate_cover_letter 내부에서 처리될 수도 있음)
         error_message = f"Max retries exceeded for LLM call: {e_max_retries}"
         logger.error(f"{log_prefix} {error_message}", exc_info=True)
-        # 실패 상태 업데이트
-        self.update_state(state=states.FAILURE, meta={'current_step': '오류: 자기소개서 생성 재시도 한도를 초과했습니다.', 'error': error_message, 'type': 'MaxRetriesExceededError', 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'})
+        # Celery가 예외를 인식하도록 'PROGRESS' 로만 업데이트.
+        self.update_state(state='PROGRESS',
+                           meta={
+                               'current_step': '오류: 자기소개서 생성 재시도 한도를 초과했습니다.',
+                               'error': error_message,
+                               'type': 'MaxRetriesExceededError',
+                               'current_task_id': task_id,
+                               'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'
+                           })
         _update_root_task_state(
             root_task_id=root_task_id, 
             state=states.FAILURE, 
@@ -228,8 +249,16 @@ def step_4_generate_cover_letter(self, prev_result: Dict[str, Any], chain_log_id
         error_message = f"Unexpected error in cover letter generation: {e_gen}"
         detailed_error_info = get_detailed_error_info(e_gen) # 상세 오류 정보 추출
         logger.error(f"{log_prefix} {error_message}", exc_info=True)
-        # 실패 상태 업데이트
-        self.update_state(state=states.FAILURE, meta={'current_step': '오류: 자기소개서 생성 중 예기치 않은 문제가 발생했습니다.', 'error': error_message, 'type': str(type(e_gen).__name__), 'details': detailed_error_info, 'current_task_id': task_id, 'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'})
+        # Celery가 예외를 처리하도록 'PROGRESS' 만 사용.
+        self.update_state(state='PROGRESS',
+                           meta={
+                               'current_step': '오류: 자기소개서 생성 중 예기치 않은 문제가 발생했습니다.',
+                               'error': error_message,
+                               'type': str(type(e_gen).__name__),
+                               'details': detailed_error_info,
+                               'current_task_id': task_id,
+                               'pipeline_step': 'COVER_LETTER_GENERATION_FAILED'
+                           })
         _update_root_task_state(
             root_task_id=root_task_id, 
             state=states.FAILURE, 
