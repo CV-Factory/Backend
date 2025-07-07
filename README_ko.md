@@ -150,7 +150,7 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
 ├── cloudbuild.yaml   # CI/CD를 위한 Google Cloud Build 설정 파일
 ├── request_body.json # API 요청을 위한 예시 JSON 페이로드
 ├── .gitignore        # Git이 무시해야 하는, 의도적으로 추적하지 않는 파일을 지정
-├── LICENSE           # 라이선스 파일 (모든 권리 보유)
+├── LICENSE           # 라이선스 파일 (Apache License 2.0)
 ├── README.md         # 영문 README 파일
 ├── README_ko.md      # 한글 README 파일 (현재 파일)
 ├── core/             # 애플리케이션의 핵심 유틸리티 및 설정
@@ -161,7 +161,7 @@ Celery에 의해 관리되는 백그라운드 작업은 자동으로 처리됩�
 
 ## 📄 라이선스
 
-All rights reserved
+이 프로젝트는 Apache License 2.0 하에 배포됩니다. 자세한 내용은 `LICENSE` 파일을 참고하세요.
 
 ## 📬 문의
 
